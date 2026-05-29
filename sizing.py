@@ -16,8 +16,10 @@ The classic estimation formula is:
 These factors are the industry-standard diamond weight-estimation constants.
 They are validated against the supplied Matrix Gold screenshots:
 
-  * Round  9.40 mm dia, 5.83 depth (62%):  9.40^2 * 5.83 * 0.0061  = 3.14 ct
+  * Round  9.40 mm dia, 5.83 depth (62%):  9.40^2 * 5.83 * 0.006018 = 3.10 ct
            -> Matrix Gold shows 3.1 ct                                    OK
+    (0.006018 is the exact factor back-solved from the screenshot:
+     3.1 / (9.40 * 9.40 * 5.83); the trade rule-of-thumb 0.0061 is ~+1%.)
   * Oval   10.00 x 8.00 mm, 4.88 depth (61%): 10*8*4.88 * 0.0062   = 2.42 ct
            -> Matrix Gold shows 2.415 ct                                  OK
 
@@ -34,7 +36,7 @@ import os
 # Industry-standard weight-estimation factors. Round/oval are pinned to the
 # Matrix Gold reference; the rest are the widely published GIA-style constants.
 SHAPE_FACTORS: dict[str, float] = {
-    "round": 0.0061,
+    "round": 0.006018,
     "oval": 0.0062,
     "pear": 0.0061,
     "marquise": 0.00565,
@@ -142,22 +144,39 @@ def mm_to_carat(
     return round(carat, 3)
 
 
-def carat_to_round_mm(carat: float, depth_pct: float | None = None) -> float:
-    """Inverse for ROUND stones: estimate diameter (mm) from carat weight.
+def carat_to_mm(
+    carat: float, shape: str = "round", l_w_ratio: float = 1.0
+) -> dict:
+    """Inverse: estimate mm dimensions from a target carat weight.
 
-    Useful when the user gives a target stone size in carats and we need to
-    render/spec the matching millimetre diameter. Solves
-        ct = dia^2 * (dia * depth_pct) * factor * girdle_adj   for dia.
+    For SPEC/DISPLAY only — we report the millimetre size that matches a
+    requested carat. Nothing is sent to a CAD/render pipeline.
+
+    Solves, with width W as the unknown, length L = W * ratio and
+    depth D = W * depth_pct:
+        ct = (W*ratio) * W * (W*depth_pct) * factor
+           = W^3 * ratio * depth_pct * factor
+    Returns {"length_mm", "width_mm", "depth_mm"}.
     """
+    shape = _norm(shape)
     if carat <= 0:
-        return 0.0
-    depth_pct = depth_pct or TYPICAL_DEPTH_PCT["round"]
-    factor = SHAPE_FACTORS["round"]
-    girdle_adj = 1.0
-    # ct = dia^3 * depth_pct * factor * girdle_adj
-    denom = depth_pct * factor * girdle_adj
-    dia_cubed = carat / denom
-    return round(dia_cubed ** (1.0 / 3.0), 2)
+        return {"length_mm": 0.0, "width_mm": 0.0, "depth_mm": 0.0}
+    factor = SHAPE_FACTORS.get(shape, _DEFAULT_FACTOR)
+    depth_pct = TYPICAL_DEPTH_PCT.get(shape, _DEFAULT_DEPTH_PCT)
+    if shape in _ROUND_LIKE:
+        l_w_ratio = 1.0
+    denom = l_w_ratio * depth_pct * factor
+    width = (carat / denom) ** (1.0 / 3.0)
+    return {
+        "length_mm": round(width * l_w_ratio, 2),
+        "width_mm": round(width, 2),
+        "depth_mm": round(width * depth_pct, 2),
+    }
+
+
+def carat_to_round_mm(carat: float) -> float:
+    """Convenience: round-stone diameter (mm) for a target carat weight."""
+    return carat_to_mm(carat, "round")["width_mm"]
 
 
 # ── FIXED CHART LOOKUP ──────────────────────────────────────────────────────
@@ -225,6 +244,39 @@ def chart_lookup_carat(
         + (float(r["width_mm"]) - width_mm) ** 2,
     )
     return round(float(best["ct"]), 3), "chart"
+
+
+def chart_carat_to_size(
+    target_carat: float, shape: str = "round", chart: dict | None = None
+) -> dict:
+    """Reverse fixed-chart lookup: nearest charted size for a target carat.
+
+    "Fixed chart only" path for deriving dimensions from a requested weight —
+    returns the mm dimensions of the chart row whose carat is closest to
+    target_carat, plus that row's actual charted carat. Falls back to the
+    carat_to_mm formula only if the shape is entirely absent from the chart.
+    """
+    shape = _norm(shape)
+    chart = chart if chart is not None else load_gem_chart()
+    rows = chart.get(shape)
+    if not rows or target_carat <= 0:
+        dims = carat_to_mm(target_carat, shape)
+        return {**dims, "ct": target_carat, "source": "formula"}
+
+    best = min(rows, key=lambda r: abs(float(r["ct"]) - target_carat))
+    if shape in _ROUND_LIKE:
+        d = float(best["mm"])
+        return {
+            "length_mm": d, "width_mm": d,
+            "depth_mm": round(d * TYPICAL_DEPTH_PCT["round"], 2),
+            "ct": float(best["ct"]), "source": "chart",
+        }
+    return {
+        "length_mm": float(best["length_mm"]),
+        "width_mm": float(best["width_mm"]),
+        "depth_mm": round(float(best["width_mm"]) * TYPICAL_DEPTH_PCT.get(shape, _DEFAULT_DEPTH_PCT), 2),
+        "ct": float(best["ct"]), "source": "chart",
+    }
 
 
 def price_dimensions_to_groups(stones: list[dict]) -> list[dict]:
