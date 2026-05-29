@@ -44,6 +44,17 @@ CASTING_FLAT_USD = float(os.environ.get("CASTING_FLAT_USD", "8.00"))
 POLISH_FLAT_USD = float(os.environ.get("POLISH_FLAT_USD", "6.00"))
 SETTING_USD_PER_STONE = float(os.environ.get("SETTING_USD_PER_STONE", "0.40"))
 
+# Markup multiplier on metal value (1.0 = at-cost). Used by price_bom.
+METAL_MARKUP = float(os.environ.get("METAL_MARKUP", "1.0"))
+
+# Full alloy name -> gold-rate bucket key (shared by compute_costs & price_bom).
+ALLOY_TO_RATE_KEY = {
+    "24k_yellow_gold": "24k", "22k_yellow_gold": "22k",
+    "18k_yellow_gold": "18k", "18k_white_gold": "18k", "18k_rose_gold": "18k",
+    "14k_yellow_gold": "14k", "14k_white_gold": "14k", "14k_rose_gold": "14k",
+    "10k_yellow_gold": "10k", "platinum_950": "pt950", "silver_925": "ag925",
+}
+
 
 def _fetch_json(url: str, timeout: int = 8) -> dict | None:
     try:
@@ -276,5 +287,82 @@ def compute_costs(bom: dict, gold_rates: dict, diamond_rates: dict) -> dict:
         "grand_total": {
             "usd": total_usd,
             "inr": to_inr(total_usd),
+        },
+    }
+
+
+def price_bom(
+    weight_result: dict,
+    diamond_groups: list[dict],
+    gold_rates: dict,
+    diamond_rates: dict,
+    markup: float | None = None,
+) -> dict:
+    """JEWELBENCH-FORGE pricing: metal value from NET weight + stones from carat.
+
+    Implements:  (net_metal_weight * spot_per_g * markup) + gemstone_value.
+    No flat manufacturing line items (that's compute_costs' job) — FORGE prices
+    purely off the two weights the spec asks for, plus carat-based stones.
+
+    weight_result   output of weight_estimator.reconcile/estimate_weight
+                    (carries alloy, net_weight_g, metal_weight_g,
+                     shank_weight_range_g)
+    diamond_groups  groups with carat_each already resolved via the fixed chart
+                    (sizing.price_dimensions_to_groups)
+    """
+    markup = METAL_MARKUP if markup is None else markup
+    alloy = (weight_result.get("alloy") or "18k_yellow_gold").lower()
+    rate_key = ALLOY_TO_RATE_KEY.get(alloy, "18k")
+    rate_usd = gold_rates["per_g"].get(f"{rate_key}_usd", 0.0)
+    usd_inr = gold_rates["usd_inr"]
+
+    net_w = float(weight_result.get("net_weight_g") or 0.0)
+    metal_w = float(weight_result.get("metal_weight_g") or 0.0)
+
+    # Metal value is priced on NET weight (metal only); markup applied here.
+    metal_value_usd = round(net_w * rate_usd * markup, 2)
+
+    # Shank value as a min..max RANGE (band weight range * rate * markup).
+    shank_lo_g, shank_hi_g = (weight_result.get("shank_weight_range_g")
+                              or [0.0, 0.0])
+    shank_value_usd = [
+        round(shank_lo_g * rate_usd * markup, 2),
+        round(shank_hi_g * rate_usd * markup, 2),
+    ]
+
+    # Stones: carat already comes from the fixed gem chart upstream.
+    priced_groups = [price_stone_group(g, diamond_rates) for g in diamond_groups]
+    stone_total_usd = round(sum(g["line_total_usd"] for g in priced_groups), 2)
+    stone_total_carat = round(sum(g["total_carat"] for g in priced_groups), 3)
+    stone_total_count = sum(g["count"] for g in priced_groups)
+
+    grand_usd = round(metal_value_usd + stone_total_usd, 2)
+
+    def to_inr(v: float) -> float:
+        return round(v * usd_inr, 2)
+
+    return {
+        "metal": {
+            "alloy": alloy,
+            "net_weight_g": net_w,
+            "metal_weight_g": metal_w,
+            "rate_usd_per_g": rate_usd,
+            "markup": markup,
+            "value_usd": metal_value_usd,
+            "value_inr": to_inr(metal_value_usd),
+            "shank_value_usd": shank_value_usd,
+            "shank_value_inr": [to_inr(shank_value_usd[0]),
+                                to_inr(shank_value_usd[1])],
+        },
+        "diamonds": {
+            "groups": priced_groups,
+            "total_count": stone_total_count,
+            "total_carat": stone_total_carat,
+            "total_usd": stone_total_usd,
+            "total_inr": to_inr(stone_total_usd),
+        },
+        "grand_total": {
+            "usd": grand_usd,
+            "inr": to_inr(grand_usd),
         },
     }
