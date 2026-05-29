@@ -1,0 +1,46 @@
+{
+  "_comment": "JewelBench diamond rate reference sheet. Indicative wholesale USD/ct levels (Q1 2026 reference). Pricing = round_rates_usd_per_ct[carat-bucket] * shape_factor[shape] * clarity_color_factor[tier] * carat. EDIT THESE NUMBERS to match your supplier's actual rate sheet — they are starter values, not live prices.",
+  "_last_updated": "2026-05-11",
+  "_currency": "USD",
+  "_clarity_tiers": {
+    "premium": "D-F color / VVS1-VS2 clarity (top investment quality)",
+    "fine": "G-H color / VS2-SI1 clarity (everyday luxury — default)",
+    "commercial": "I-J color / SI2-I1 clarity (mid-market)",
+    "promotional": "K+ color / I1-I2 clarity (value tier)"
+  },
+  "shape_factor": {
+    "round": 1.00,
+    "oval": 0.85,
+    "pear": 0.80,
+    "marquise": 0.75,
+    "princess": 0.75,
+    "cushion": 0.75,
+    "radiant": 0.75,
+    "asscher": 0.70,
+    "emerald": 0.70,
+    "heart": 0.70,
+    "trillion": 0.70,
+    "baguette": 0.55
+  },
+  "clarity_color_factor": {
+    "premium": 1.45,
+    "fine": 1.00,
+    "commercial": 0.72,
+    "promotional": 0.52
+  },
+  "round_rates_usd_per_ct": [
+    {"min_ct": 0.000, "max_ct": 0.005, "rate": 180},
+    {"min_ct": 0.005, "max_ct": 0.010, "rate": 260},
+    {"min_ct": 0.010, "max_ct": 0.030, "rate": 380},
+    {"min_ct": 0.030, "max_ct": 0.050, "rate": 580},
+    {"min_ct": 0.050, "max_ct": 0.100, "rate": 880},
+    {"min_ct": 0.100, "max_ct": 0.250, "rate": 1450},
+    {"min_ct": 0.250, "max_ct": 0.500, "rate": 2700},
+    {"min_ct": 0.500, "max_ct": 0.750, "rate": 3900},
+    {"min_ct": 0.750, "max_ct": 1.000, "rate": 5100},
+    {"min_ct": 1.000, "max_ct": 1.500, "rate": 7400},
+    {"min_ct": 1.500, "max_ct": 2.000, "rate": 9400},
+    {"min_ct": 2.000, "max_ct": 3.000, "rate": 12800},
+    {"min_ct": 3.000, "max_ct": 99.000, "rate": 17500}
+  ]
+}
