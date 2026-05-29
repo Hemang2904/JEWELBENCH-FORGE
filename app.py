@@ -11,13 +11,12 @@ from preprocessing import (
     strip_url_to_white,
     enrich_description,
     validate_design,
-    extract_bom,
 )
 from pricing import (
     get_gold_rates,
     load_diamond_rates,
-    compute_costs,
 )
+import forge_bom
 import hashlib
 import datetime
 import json as _json
@@ -1153,250 +1152,16 @@ if confirmed_image_urls and confirmed_enriched_specs:
         st.session_state["last_image_urls"] = image_urls
         st.session_state.setdefault("views", {})
 
-        with st.spinner("Computing Bill of Materials..."):
-            try:
-                bom_raw = extract_bom(results[0], target_summary)
-                if bom_raw and not bom_raw.get("_error"):
-                    gold = get_gold_rates()
-                    diamond_rates = load_diamond_rates()
-                    costed = compute_costs(bom_raw, gold, diamond_rates)
-                    st.session_state["last_bom"] = bom_raw
-                    st.session_state["last_bom_costs"] = costed
-                    st.session_state["last_bom_gold"] = gold
-                    st.session_state["last_bom_url"] = results[0]
-                    st.session_state.pop("last_bom_error", None)
-                else:
-                    st.session_state["last_bom_error"] = (
-                        (bom_raw or {}).get("_error", "BoM extractor returned nothing")
-                    )
-                    st.session_state.pop("last_bom", None)
-                    st.session_state.pop("last_bom_costs", None)
-            except Exception as bom_exc:
-                st.session_state["last_bom_error"] = f"BoM exception: {bom_exc}"
-                st.session_state.pop("last_bom", None)
-                st.session_state.pop("last_bom_costs", None)
+        # FORGE: the Bill of Materials is computed at the END of the flow
+        # (forge_bom.render), after additional views, so AI/token spend accrues
+        # in order. We only persist the design refs the FORGE BoM needs here.
+        st.session_state["last_bom_url"] = results[0]
 
         st.toast("Design generated successfully!", icon="✨")
     else:
         st.error("Generation failed. Please try again or contact support.")
 
 
-# ── BILL OF MATERIALS ─────────────────────────────────────────────────────────
-
-if st.session_state.get("last_bom") and st.session_state.get("last_bom_costs"):
-    _bom = st.session_state["last_bom"]
-    _costs = st.session_state["last_bom_costs"]
-    _gold = st.session_state.get("last_bom_gold") or get_gold_rates()
-    _fx = _gold["usd_inr"]
-
-    _sku_seed = (
-        (st.session_state.get("last_prompt") or "")
-        + (st.session_state.get("last_bom_url") or "")
-    )
-    _sku = "JBR-" + hashlib.sha1(_sku_seed.encode()).hexdigest()[:8].upper()
-    _ts_str = datetime.datetime.fromtimestamp(_gold["ts"]).strftime("%H:%M")
-    _rate_line = (
-        f"Gold ${_gold['usd_per_oz_xau']:,.2f}/oz · "
-        f"₹{_gold['per_g'].get('18k_inr', 0):,.0f}/g 18k · "
-        f"USD/INR {_gold['usd_inr']:,.2f} · as of {_ts_str}"
-    )
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="section-title"><span class="sec-num">05</span> Bill of Materials</div>'
-        f'<div class="section-subtitle">{_rate_line}</div>',
-        unsafe_allow_html=True,
-    )
-
-    _metal = _costs["metal"]
-    _dia = _costs["diamonds"]
-    _mf = _costs["manufacturing"]
-    _gt = _costs["grand_total"]
-    _alloy_pretty = _metal["alloy"].replace("_", " ").title()
-
-    # Metric summary row
-    _mc1, _mc2, _mc3, _mc4 = st.columns(4, gap="medium")
-    _mc1.metric("Metal", f"${_metal['total_usd']:,.2f}", f"₹{_metal['total_inr']:,.0f}")
-    _mc2.metric("Diamonds", f"${_dia['total_usd']:,.2f}", f"₹{_dia['total_inr']:,.0f}")
-    _mc3.metric("Manufacturing", f"${_mf['total_usd']:,.2f}", f"₹{_mf['total_inr']:,.0f}")
-    _mc4.metric("Grand Total", f"${_gt['usd']:,.2f}", f"₹{_gt['inr']:,.0f}")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    with st.expander(f"Metal — {_alloy_pretty}", expanded=True):
-        st.markdown(
-            f"""
-| Alloy | Weight | Rate USD/g | Rate INR/g | Subtotal USD | Subtotal INR |
-|---|---|---|---|---|---|
-| {_alloy_pretty} | {_metal['weight_g']:.2f} g | ${_metal['rate_usd_per_g']:,.2f} | ₹{_metal['rate_inr_per_g']:,.2f} | ${_metal['total_usd']:,.2f} | ₹{_metal['total_inr']:,.2f} |
-"""
-        )
-
-    if _dia["groups"]:
-        with st.expander(
-            f"Diamonds — {_dia['total_count']} stones · {_dia['total_carat']:.3f} ct total",
-            expanded=True,
-        ):
-            st.caption("Reference wholesale rates — edit `diamond_rates.json` to match your supplier")
-            _dia_rows = "\n".join(
-                f"| {g['location'].replace('_', ' ')} | {g['shape']} | "
-                f"{g['count']} | {g['carat_each']:.3f} | "
-                f"{(g.get('mm_each') if g.get('mm_each') is not None else '—')} | "
-                f"{g['clarity']} | {g['setting']} | "
-                f"${g['unit_usd']:,.2f} | ${g['line_total_usd']:,.2f} | "
-                f"₹{g['line_total_usd'] * _fx:,.2f} |"
-                for g in _dia["groups"]
-            )
-            st.markdown(
-                f"""
-| Location | Shape | Count | ct each | mm | Clarity | Setting | $/stone | Subtotal USD | Subtotal INR |
-|---|---|---|---|---|---|---|---|---|---|
-{_dia_rows}
-| **TOTAL** | | **{_dia['total_count']}** | | | | | | **${_dia['total_usd']:,.2f}** | **₹{_dia['total_inr']:,.2f}** |
-"""
-            )
-
-    with st.expander("Manufacturing", expanded=False):
-        st.markdown(
-            f"""
-| Line | USD | INR |
-|---|---|---|
-| CAD | ${_mf['cad_usd']:.2f} | ₹{_mf['cad_usd'] * _fx:,.2f} |
-| Wax printing | ${_mf['wax_usd']:.2f} | ₹{_mf['wax_usd'] * _fx:,.2f} |
-| Casting | ${_mf['casting_usd']:.2f} | ₹{_mf['casting_usd'] * _fx:,.2f} |
-| Polishing | ${_mf['polishing_usd']:.2f} | ₹{_mf['polishing_usd'] * _fx:,.2f} |
-| Stone setting | ${_mf['stone_setting_usd']:.2f} | ₹{_mf['stone_setting_usd'] * _fx:,.2f} |
-| Labour | ${_mf['labour_usd']:.2f} | ₹{_mf['labour_usd'] * _fx:,.2f} |
-| **TOTAL** | **${_mf['total_usd']:,.2f}** | **₹{_mf['total_inr']:,.2f}** |
-"""
-        )
-
-    # Dimensions + ring size
-    _dim = _bom.get("dimensions_mm") or {}
-    _rs = _bom.get("ring_size") or {}
-    _sr = _bom.get("size_range") or {}
-    _tol = _bom.get("weight_tolerance_pct")
-    _cn = _bom.get("construction_notes") or ""
-
-    with st.expander("Dimensions, Size & Production", expanded=False):
-        _spec_cols = st.columns(3, gap="medium")
-        with _spec_cols[0]:
-            st.markdown("**Dimensions (mm)**")
-            st.markdown(
-                f"- Inner diameter: **{_dim.get('inner_diameter', '—')}**\n"
-                f"- Band width (bottom): **{_dim.get('band_width_at_bottom', '—')}**\n"
-                f"- Band width (shoulder): **{_dim.get('band_width_at_shoulder', '—')}**\n"
-                f"- Band thickness: **{_dim.get('band_thickness', '—')}**\n"
-                f"- Head height: **{_dim.get('head_height_above_finger', '—')}**\n"
-                f"- Head diameter: **{_dim.get('head_diameter', '—')}**"
-            )
-        with _spec_cols[1]:
-            st.markdown("**Ring Size**")
-            _sr_min = _sr.get("us_min", "—")
-            _sr_max = _sr.get("us_max", "—")
-            st.markdown(
-                f"- US: **{_rs.get('us', '—')}**\n"
-                f"- UK: **{_rs.get('uk', '—')}**\n"
-                f"- Inner circumference: **{_rs.get('inner_circumference_mm', '—')} mm**\n"
-                f"- Producible range: **US {_sr_min} – US {_sr_max}**"
-            )
-        with _spec_cols[2]:
-            st.markdown("**Production**")
-            _tol_line = f"- Weight tolerance: **±{_tol}%**\n" if _tol else ""
-            st.markdown(
-                f"- SKU: **{_sku}**\n"
-                f"{_tol_line}"
-                f"- Analyzed by: _JewelBench AI_"
-            )
-            if _cn:
-                st.markdown(f"_{_cn}_")
-
-    # Downloads
-    _full_bom = {
-        "sku": _sku,
-        "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "source_image": st.session_state.get("last_bom_url"),
-        "design_summary": st.session_state.get("last_target_summary"),
-        "bom": _bom,
-        "costs": _costs,
-        "gold_rates": _gold,
-    }
-    _bom_json = _json.dumps(_full_bom, indent=2, default=str)
-    _md_lines = [
-        f"# Bill of Materials — {_sku}",
-        f"_Generated {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}_",
-        f"_Rates: {_rate_line}_",
-        "",
-        "## Metal",
-        f"- Alloy: **{_alloy_pretty}**",
-        (f"- Weight: **{_metal['weight_g']:.2f} g** (tolerance ±{_tol}%)" if _tol else f"- Weight: **{_metal['weight_g']:.2f} g**"),
-        f"- Cost: **${_metal['total_usd']:,.2f}** / **₹{_metal['total_inr']:,.2f}**",
-        "",
-        f"## Diamonds — {_dia['total_count']} stones, {_dia['total_carat']:.3f} ct total",
-    ]
-    for g in _dia["groups"]:
-        _md_lines.append(
-            f"- {g['location'].replace('_', ' ')}: {g['count']} × "
-            f"{g['shape']} {g['carat_each']:.3f} ct ({g['clarity']}, "
-            f"{g['setting']}) — ${g['line_total_usd']:,.2f} / "
-            f"₹{g['line_total_usd'] * _fx:,.2f}"
-        )
-    _md_lines += [
-        f"- **Diamond subtotal: ${_dia['total_usd']:,.2f} / ₹{_dia['total_inr']:,.2f}**",
-        "",
-        "## Manufacturing",
-        f"- CAD: ${_mf['cad_usd']:.2f}",
-        f"- Wax: ${_mf['wax_usd']:.2f}",
-        f"- Casting: ${_mf['casting_usd']:.2f}",
-        f"- Polishing: ${_mf['polishing_usd']:.2f}",
-        f"- Stone setting: ${_mf['stone_setting_usd']:.2f}",
-        f"- Labour: ${_mf['labour_usd']:.2f}",
-        f"- **Manufacturing subtotal: ${_mf['total_usd']:.2f} / ₹{_mf['total_inr']:,.2f}**",
-        "",
-        "## Total Input Cost",
-        f"**${_gt['usd']:,.2f} USD / ₹{_gt['inr']:,.2f} INR**",
-        "",
-        "## Dimensions (mm)",
-        f"- Inner diameter: {_dim.get('inner_diameter', '—')}",
-        f"- Band width (bottom): {_dim.get('band_width_at_bottom', '—')}",
-        f"- Band width (shoulder): {_dim.get('band_width_at_shoulder', '—')}",
-        f"- Band thickness: {_dim.get('band_thickness', '—')}",
-        f"- Head height: {_dim.get('head_height_above_finger', '—')}",
-        f"- Head diameter: {_dim.get('head_diameter', '—')}",
-        "",
-        "## Ring Size",
-        f"- US: {_rs.get('us', '—')}",
-        f"- UK: {_rs.get('uk', '—')}",
-        f"- Inner circumference: {_rs.get('inner_circumference_mm', '—')} mm",
-        f"- Producible range: US {_sr_min} – US {_sr_max}",
-        "",
-        "## Construction notes",
-        _cn or "_(none provided)_",
-    ]
-    _bom_md = "\n".join(_md_lines)
-
-    _dl_cols = st.columns(2, gap="small")
-    with _dl_cols[0]:
-        st.download_button(
-            "↓ Download BoM (JSON)",
-            data=_bom_json,
-            file_name=f"{_sku}_bom.json",
-            mime="application/json",
-            use_container_width=True,
-        )
-    with _dl_cols[1]:
-        st.download_button(
-            "↓ Download BoM (Markdown)",
-            data=_bom_md,
-            file_name=f"{_sku}_bom.md",
-            mime="text/markdown",
-            use_container_width=True,
-        )
-
-elif st.session_state.get("last_bom_error"):
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.warning(f"Bill of Materials unavailable: {st.session_state['last_bom_error']}")
 
 
 # ── ADDITIONAL VIEWS ──────────────────────────────────────────────────────────
@@ -1692,6 +1457,12 @@ if st.session_state.get("last_results"):
                 st.toast("Refined design ready!", icon="✨")
             else:
                 st.error("Refinement failed. Please try again.")
+
+
+# ── BILL OF MATERIALS (FORGE: weight → target → dimensions → price) ───────────
+# Rendered last so AI/token spend accrues in order and the BoM reflects the
+# final design + any additional views.
+forge_bom.render()
 
 
 # ── FOOTER ────────────────────────────────────────────────────────────────────

@@ -196,8 +196,13 @@ def _prompt(alloy: str, ring_size: str | None) -> str:
         '  "head_volume_mm3": <number, head/setting portion>,\n'
         '  "stone_seat_volume_mm3": <number, metal removed for stone seats>,\n'
         '  "key_dimensions_mm": {"band_width": <n>, "band_thickness": <n>},\n'
+        '  "stones": [\n'
+        '    {"location": "center|halo|shank|...", "shape": "round|oval|...",\n'
+        '     "count": <int>, "length_mm": <n>, "width_mm": <n>}\n'
+        "  ],\n"
         '  "confidence": "high|medium|low"\n'
         "}\n"
+        "Measure each distinct stone group; give mm dimensions, not carats.\n"
         f"Target alloy is {alloy} (affects nothing in your volume estimate)."
     )
 
@@ -266,7 +271,14 @@ def estimate_weight(image_urls: list[str], alloy: str,
     if not good:
         return {"_error": "all weight models failed", "_per_model": raw,
                 "alloy": alloy}
-    return {**reconcile(good, alloy), "montage_url": montage_url}
+    out = {**reconcile(good, alloy), "montage_url": montage_url}
+    # Stones: take the first model that reported a stone list (mm dims).
+    for e in good:
+        if e.get("stones"):
+            out["stones"] = e["stones"]
+            break
+    out.setdefault("stones", [])
+    return out
 
 
 if __name__ == "__main__":
