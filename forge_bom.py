@@ -198,6 +198,11 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         st.warning("⚠️ Only one model returned — the ensemble cross-check "
                    "didn't run, so treat this as a single-model estimate "
                    "(confidence capped at medium).")
+    errs = est.get("errors") or []
+    if errs:
+        with st.expander(f"Model call diagnostics ({len(errs)} failed)"):
+            for e in errs:
+                st.caption(f"✗ `{e.get('model')}` — {e.get('error')}")
 
     stone_groups = sizing.price_dimensions_to_groups(est.get("stones", []))
 

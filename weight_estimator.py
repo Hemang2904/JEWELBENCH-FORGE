@@ -28,6 +28,7 @@ import io
 import json
 import os
 import re
+import time
 import urllib.request
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -38,6 +39,14 @@ WEIGHT_MODEL_SECONDARY = os.environ.get(
 )
 # any-llm/vision is the existing path; kept overridable since fal marks it legacy.
 VISION_ENDPOINT = os.environ.get("WEIGHT_VISION_ENDPOINT", "fal-ai/any-llm/vision")
+# Extra models tried (in order) if the primary two don't BOTH return, so the
+# ensemble reliably ends up with two independent estimates.
+WEIGHT_FALLBACK_MODELS = [
+    m.strip() for m in os.environ.get(
+        "WEIGHT_FALLBACK_MODELS", "openai/gpt-5-chat,google/gemini-2.5-flash"
+    ).split(",") if m.strip()
+]
+WEIGHT_CALL_RETRIES = int(os.environ.get("WEIGHT_CALL_RETRIES", "2"))
 CASTING_FACTOR = float(os.environ.get("CASTING_FACTOR", "0.97"))
 # Extra uncertainty padding applied to the min..max range (fraction).
 RANGE_PAD = float(os.environ.get("WEIGHT_RANGE_PAD", "0.05"))
@@ -175,16 +184,21 @@ def scale_to_target(estimate: dict, target_weight_g: float) -> dict:
 # ── Vision I/O ───────────────────────────────────────────────────────────────
 
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
+_FENCE = re.compile(r"```(?:json)?", re.IGNORECASE)
 
 
 def _extract_json(text: str) -> dict | None:
+    """Tolerant JSON pull — handles ```json fences, prose around the object,
+    and trailing commas (all common in Gemini/GPT output)."""
     if not text:
         return None
-    m = _JSON_BLOCK.search(text)
+    t = _FENCE.sub("", text).replace("```", "").strip()
+    m = _JSON_BLOCK.search(t)
     if not m:
         return None
+    blob = re.sub(r",(\s*[}\]])", r"\1", m.group(0))  # drop trailing commas
     try:
-        return json.loads(m.group(0))
+        return json.loads(blob)
     except ValueError:
         return None
 
@@ -263,39 +277,77 @@ def _build_montage(image_urls: list[str], cell: int = 768) -> str:
     return fal_client.upload(buf.getvalue(), content_type="image/png")
 
 
-def _call_model(model: str, montage_url: str, alloy: str,
-                ring_size: str | None) -> dict | None:
+def _call_model(model: str, montage_url: str, prompt: str,
+                tries: int | None = None) -> dict:
+    """One model, with retries + tolerant parsing. Returns a parsed estimate
+    (with _model) or {"_model", "_error"} after exhausting retries."""
     import fal_client  # lazy
-    try:
-        result = fal_client.subscribe(
-            VISION_ENDPOINT,
-            arguments={
-                "model": model,
-                "prompt": _prompt(alloy, ring_size),
-                "image_url": montage_url,
-            },
-        )
-    except Exception as e:
-        return {"_model": model, "_error": str(e)}
-    parsed = _extract_json(result.get("output") or "")
-    if parsed is None:
-        return {"_model": model, "_error": "unparseable model output"}
-    parsed["_model"] = model
-    return parsed
+    tries = WEIGHT_CALL_RETRIES if tries is None else tries
+    last_err = "unknown error"
+    for attempt in range(1, tries + 1):
+        try:
+            result = fal_client.subscribe(
+                VISION_ENDPOINT,
+                arguments={"model": model, "prompt": prompt,
+                           "image_url": montage_url},
+            )
+            parsed = _extract_json(result.get("output") or "")
+            if parsed is not None and "total_metal_volume_mm3" in parsed:
+                parsed["_model"] = model
+                return parsed
+            last_err = "unparseable output / missing volume"
+        except Exception as e:
+            last_err = str(e)[:200]
+        if attempt < tries:
+            time.sleep(0.6 * attempt)  # brief backoff for transient failures
+    return {"_model": model, "_error": last_err}
 
 
 def estimate_weight(image_urls: list[str], alloy: str,
                     ring_size: str | None = None,
                     models: list[str] | None = None) -> dict:
-    """Full ensemble estimate from reference image URLs. Live (needs FAL_KEY)."""
-    models = models or [WEIGHT_MODEL_PRIMARY, WEIGHT_MODEL_SECONDARY]
+    """Ensemble estimate. Tries the primary two in parallel, then walks the
+    fallback models until TWO independent estimates succeed — so a single
+    flaky model no longer collapses the ensemble. Live (needs FAL_KEY)."""
+    pool = models or [WEIGHT_MODEL_PRIMARY, WEIGHT_MODEL_SECONDARY]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for m in pool + WEIGHT_FALLBACK_MODELS:
+        if m and m not in seen:
+            seen.add(m)
+            ordered.append(m)
+
     montage_url = _build_montage(image_urls)
-    raw = [_call_model(m, montage_url, alloy, ring_size) for m in models]
-    good = [e for e in raw if e and "total_metal_volume_mm3" in e]
+    prompt = _prompt(alloy, ring_size)
+    good: list[dict] = []
+    errors: list[dict] = []
+
+    def _record(res: dict) -> None:
+        if "total_metal_volume_mm3" in res:
+            good.append(res)
+        else:
+            errors.append({"model": res.get("_model"),
+                           "error": res.get("_error")})
+
+    # Phase 1: the primary two, in parallel (each already retries internally).
+    from concurrent.futures import ThreadPoolExecutor
+    first = ordered[:2]
+    with ThreadPoolExecutor(max_workers=max(1, len(first))) as ex:
+        for res in ex.map(lambda m: _call_model(m, montage_url, prompt), first):
+            _record(res)
+
+    # Phase 2: still short of two? walk the fallbacks one at a time.
+    for m in ordered[2:]:
+        if len(good) >= 2:
+            break
+        _record(_call_model(m, montage_url, prompt))
+
     if not good:
-        return {"_error": "all weight models failed", "_per_model": raw,
-                "alloy": alloy}
-    out = {**reconcile(good, alloy), "montage_url": montage_url}
+        return {"_error": "all weight models failed", "errors": errors,
+                "_per_model": errors, "alloy": alloy}
+
+    out = {**reconcile(good, alloy), "montage_url": montage_url,
+           "errors": errors}
     # Stones + key dimensions: take the first model that reported each.
     for e in good:
         if e.get("stones") and "stones" not in out:
