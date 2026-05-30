@@ -120,9 +120,21 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
     metal_w_all = [volume_to_weight(v, density) for v in total_v]
     metal_lo, metal_hi = _range(metal_w_all)
 
+    n_models = len(total_v)
+    single_model = n_models < 2
     disagreement = 0.0
-    if total_mean > 0 and len(total_v) > 1:
+    if total_mean > 0 and not single_model:
         disagreement = round((max(total_v) - min(total_v)) / total_mean, 3)
+
+    # A single model can't be cross-checked, so it never gets "high".
+    if single_model:
+        confidence = "medium"
+    elif disagreement > 0.25:
+        confidence = "low"
+    elif disagreement > 0.10:
+        confidence = "medium"
+    else:
+        confidence = "high"
 
     return {
         "alloy": alloy,
@@ -133,9 +145,9 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
         "metal_weight_range_g": [metal_lo, metal_hi],
         "shank_weight_range_g": [shank_lo, shank_hi],
         "models": [e.get("_model") for e in estimates if e],
+        "single_model": single_model,
         "model_disagreement": disagreement,
-        "confidence": "low" if disagreement > 0.25 else
-                      "medium" if disagreement > 0.10 else "high",
+        "confidence": confidence,
         "_per_model": estimates,
     }
 
@@ -186,23 +198,35 @@ def _prompt(alloy: str, ring_size: str | None) -> str:
         "proportions and state lower confidence."
     )
     return (
-        "You are a jewelry CAD estimator. Study every view in this montage of "
-        "the SAME ring and estimate its METAL VOLUME in cubic millimetres. "
-        f"{scale_hint}\n"
+        "You are a jewelry CAD estimator. The montage shows MULTIPLE views of "
+        "the SAME ring (orthographic top/side/front, three-quarter, a band "
+        "cross-section, a head macro, and an underside view). Use them together "
+        "— the cross-section and underside reveal band thickness and hollowing; "
+        "the top/macro reveal every stone. Estimate METAL VOLUME in cubic "
+        f"millimetres. {scale_hint}\n"
         "Return ONLY a JSON object, no prose:\n"
         "{\n"
         '  "total_metal_volume_mm3": <number, solid metal body>,\n'
         '  "shank_volume_mm3": <number, band/shank portion>,\n'
         '  "head_volume_mm3": <number, head/setting portion>,\n'
         '  "stone_seat_volume_mm3": <number, metal removed for stone seats>,\n'
-        '  "key_dimensions_mm": {"band_width": <n>, "band_thickness": <n>},\n'
+        '  "key_dimensions_mm": {"band_width": <n>, "band_thickness": <n>,\n'
+        '     "head_height": <n>, "head_diameter": <n>},\n'
         '  "stones": [\n'
-        '    {"location": "center|halo|shank|...", "shape": "round|oval|...",\n'
-        '     "count": <int>, "length_mm": <n>, "width_mm": <n>}\n'
+        '    {"location": "center|halo|hidden_halo|three_stone|shank|pave|'
+        'shoulder|gallery", "shape": "round|oval|pear|marquise|emerald|'
+        'princess|cushion|...", "count": <int>, "length_mm": <n>,\n'
+        '     "width_mm": <n>}\n'
         "  ],\n"
         '  "confidence": "high|medium|low"\n'
         "}\n"
-        "Measure each distinct stone group; give mm dimensions, not carats.\n"
+        "CRITICAL for stones: enumerate EVERY distinct diamond/gemstone group "
+        "you can see across ALL views — center, halo, hidden halo, side/"
+        "three-stone, shank/pavé/channel, shoulder accents, gallery/peek-a-boo. "
+        "Miss none, do not merge different groups. Identify each SHAPE "
+        "correctly. Give BOTH length_mm and width_mm (for round, set "
+        "length=width=diameter; for oval/pear/marquise/emerald give the true "
+        "long and short axes). Report mm dimensions, never carats.\n"
         f"Target alloy is {alloy} (affects nothing in your volume estimate)."
     )
 
@@ -217,7 +241,7 @@ def _build_montage(image_urls: list[str], cell: int = 768) -> str:
     import fal_client       # lazy
 
     imgs = []
-    for u in image_urls[:5]:
+    for u in image_urls[:8]:
         try:
             with urllib.request.urlopen(u, timeout=15) as r:
                 imgs.append(Image.open(io.BytesIO(r.read())).convert("RGB"))
@@ -226,7 +250,7 @@ def _build_montage(image_urls: list[str], cell: int = 768) -> str:
     if not imgs:
         raise RuntimeError("no reference images could be loaded for montage")
 
-    cols = min(len(imgs), 3)
+    cols = min(len(imgs), 4)
     rows = (len(imgs) + cols - 1) // cols
     sheet = Image.new("RGB", (cols * cell, rows * cell), (255, 255, 255))
     for i, im in enumerate(imgs):

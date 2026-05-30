@@ -42,37 +42,82 @@ def _pretty(alloy: str) -> str:
     return alloy.replace("_", " ").title()
 
 
-def _tech_drawing_prompt(metal: dict, kd: dict, center: dict | None,
-                         ring_size: str) -> str:
-    """Build the technical-drawing prompt from the MEASURED values, so the
-    callouts reflect the real estimate (not generic proportions)."""
-    parts = []
-    if kd.get("band_width"):
-        parts.append(f"band width {kd['band_width']} mm")
-    if kd.get("band_thickness"):
-        parts.append(f"band thickness {kd['band_thickness']} mm")
-    if center:
-        seg = f"center {center.get('shape', 'round')}"
-        if center.get("length_mm"):
-            seg += f" {center['length_mm']} mm"
-        if center.get("carat_each"):
-            seg += f" ({center['carat_each']:.2f} ct)"
-        parts.append(seg)
-    if ring_size:
-        parts.append(f"ring size US {ring_size}")
-    parts.append(f"finished {_pretty(metal['alloy'])} net weight "
-                 f"{metal['net_weight_g']:.2f} g")
-    dims = "; ".join(parts)
-    return (
-        "Re-render this EXACT ring design as a professional jewelry technical "
-        "specification drawing in pure side profile view. Add a clean "
-        "dimensional callout system — thin dark-grey arrow lines with mm "
-        f"labels — using THESE measured values: {dims}. Add a 10 mm scale bar "
-        "in the bottom-right corner. The ring stays photorealistic in its "
-        "actual metal colors and stones (preserve every design detail); the "
-        "dimension lines, mm labels, and scale bar are crisp dark-grey vector "
-        "overlays on a pure white RGB(255,255,255) background."
-    )
+_DIM_COMMON = (
+    "Preserve every design detail; the ring stays photorealistic in its actual "
+    "metal colors and stones. Dimension lines, arrows, mm labels and a 10 mm "
+    "scale bar are crisp dark-grey vector overlays on a pure white "
+    "RGB(255,255,255) background."
+)
+
+
+def _dim_view_prompts(metal: dict, kd: dict, center: dict | None,
+                      ring_size: str) -> dict:
+    """3 dimensioned views (top / side / front), each callout using the MEASURED
+    values where available (generic label otherwise)."""
+    bw, bt = kd.get("band_width"), kd.get("band_thickness")
+    hh, hd = kd.get("head_height"), kd.get("head_diameter")
+    cmm = center.get("length_mm") if center else None
+
+    def v(x):
+        return f" ({x} mm)" if x else ""
+
+    top = ("Re-render this EXACT ring from a perfectly overhead orthographic "
+           "top-down view and add mm dimension callouts for: head / center "
+           f"stone diameter{v(cmm)}, and overall top width. " + _DIM_COMMON)
+    side = ("Re-render this EXACT ring from a pure 90-degree side profile and "
+            f"add mm dimension callouts for: band width{v(bw)}, band "
+            f"thickness{v(bt)}, head height{v(hh)}, and total ring height. "
+            + _DIM_COMMON)
+    front = ("Re-render this EXACT ring from a head-on front elevation and add "
+             f"mm dimension callouts for: head width{v(hd)}, shoulder width, "
+             "and the inner band diameter for US ring size "
+             f"{ring_size or 'the specified size'}. " + _DIM_COMMON)
+    return {"Top — dimensioned": top, "Side — dimensioned": side,
+            "Front — dimensioned": front}
+
+
+def _spec_chart_md(sku: str, metal: dict, dia: dict, est: dict,
+                   ring_size: str, gold: dict) -> str:
+    """Standard jewelry spec chart (all values) as Markdown."""
+    kd = est.get("key_dimensions_mm") or {}
+    sv = metal["shank_value_usd"]
+    lines = [
+        f"### JewelBench Forge — Spec Sheet `{sku}`", "",
+        "**Metal**", "", "| Field | Value |", "|---|---|",
+        f"| Alloy | {_pretty(metal['alloy'])} |",
+        f"| Net weight | {metal['net_weight_g']:.2f} g |",
+        f"| Metal weight | {metal['metal_weight_g']:.2f} g |",
+        f"| Density | {est.get('density_g_cm3')} g/cm³ |",
+        f"| Casting factor | {est.get('casting_factor')} |",
+        f"| Rate | ${metal['rate_usd_per_g']:,.2f} /g |",
+        f"| Markup | ×{metal['markup']:.2f} |",
+        f"| Metal value | ${metal['value_usd']:,.2f} / ₹{metal['value_inr']:,.0f} |",
+        f"| Shank value range | ${sv[0]:,.2f} – ${sv[1]:,.2f} |",
+        f"| Ring size (US) | {ring_size or '—'} |", "",
+        "**Dimensions (mm, estimated)**", "", "| Field | mm |", "|---|---|",
+        f"| Band width | {kd.get('band_width', '—')} |",
+        f"| Band thickness | {kd.get('band_thickness', '—')} |",
+        f"| Head height | {kd.get('head_height', '—')} |",
+        f"| Head diameter | {kd.get('head_diameter', '—')} |", "",
+        f"**Stones — {dia['total_count']} total, {dia['total_carat']:.3f} ct**",
+        "",
+        "| Location | Shape | Count | mm | ct each | ct src | $/stone | Subtotal |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for g in dia["groups"]:
+        lines.append(
+            f"| {g.get('location', '—')} | {g['shape']} | {g['count']} | "
+            f"{g.get('length_mm', '—')} | {g['carat_each']:.3f} | "
+            f"{g.get('carat_source', '—')} | ${g['unit_usd']:,.2f} | "
+            f"${g['line_total_usd']:,.2f} |"
+        )
+    lines += [
+        "", "**Totals**", "", "| Field | Value |", "|---|---|",
+        f"| Metal value | ${metal['value_usd']:,.2f} |",
+        f"| Diamonds | ${dia['total_usd']:,.2f} |",
+        f"| Gold basis | ${gold['usd_per_oz_xau']:,.0f}/oz · USD/INR {gold['usd_inr']:.2f} |",
+    ]
+    return "\n".join(lines)
 
 
 def _demo_estimate(alloy: str) -> dict:
@@ -149,6 +194,10 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         f"casting factor {est.get('casting_factor')} · "
         f"models: {', '.join(str(m) for m in est.get('models', []))}"
     )
+    if est.get("single_model"):
+        st.warning("⚠️ Only one model returned — the ensemble cross-check "
+                   "didn't run, so treat this as a single-model estimate "
+                   "(confidence capped at medium).")
 
     stone_groups = sizing.price_dimensions_to_groups(est.get("stones", []))
 
@@ -222,45 +271,74 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         use_container_width=True,
     )
 
-    # ── Technical drawing — generated HERE, with the measured values ──────────
+    # ── Production spec sheet: image + standard chart + dimensioned views ─────
     st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("#### 📐 Technical drawing")
-    st.caption("Dimensioned spec drawing rendered from the measured values "
-               "above (band, center stone, ring size, weight).")
+    st.markdown("#### 📐 Production spec sheet")
     kd = est.get("key_dimensions_mm") or {}
     center = (max(dia["groups"], key=lambda g: g.get("carat_each", 0))
               if dia["groups"] else None)
     bad_ref = (not design_ref) or str(design_ref).startswith("demo://")
     disabled = is_demo() or bad_ref
-    if st.button("Generate technical drawing", key="forge_techdraw",
+    spec_md = _spec_chart_md(sku, metal, dia, est, ring_size, gold)
+
+    col_img, col_chart = st.columns([1, 1], gap="medium")
+    with col_img:
+        st.markdown("**Design**")
+        if not bad_ref:
+            st.image(design_ref, use_container_width=True)
+        else:
+            st.caption("_(demo placeholder — no live design image)_")
+    with col_chart:
+        st.markdown(spec_md)
+
+    st.download_button("↓ Download spec chart (Markdown)", data=spec_md,
+                       file_name=f"{sku}_spec.md", mime="text/markdown",
+                       use_container_width=True)
+
+    st.markdown("**Dimensioned views** — top, side & front, each labelled with "
+                "the measured mm values.")
+    if st.button("Generate dimensioned views", key="forge_dimviews",
                  disabled=disabled, use_container_width=True):
-        with st.spinner("Rendering dimensioned technical drawing..."):
-            try:
-                import fal_client
-                result = fal_client.subscribe(
-                    "fal-ai/nano-banana-pro/edit",
-                    arguments={
-                        "image_urls": [design_ref],
-                        "prompt": _tech_drawing_prompt(metal, kd, center,
-                                                       ring_size),
-                        "num_images": 1, "resolution": "2K",
-                        "aspect_ratio": "auto", "output_format": "png",
-                    },
-                )
-                url = (result.get("images") or [{}])[0].get("url") \
-                    or (result.get("image") or {}).get("url")
-                if url:
-                    st.session_state["forge_techdraw_url"] = url
-                else:
-                    st.warning("No drawing returned.")
-            except Exception as e:
-                st.error(f"Technical drawing failed: {e}")
+        prompts = _dim_view_prompts(metal, kd, center, ring_size)
+        import fal_client
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _one(prompt: str):
+            r = fal_client.subscribe(
+                "fal-ai/nano-banana-pro/edit",
+                arguments={"image_urls": [design_ref], "prompt": prompt,
+                           "num_images": 1, "resolution": "2K",
+                           "aspect_ratio": "auto", "output_format": "png"})
+            return (r.get("images") or [{}])[0].get("url") \
+                or (r.get("image") or {}).get("url")
+
+        out: dict = {}
+        with st.status(f"Rendering {len(prompts)} dimensioned views...",
+                       expanded=True) as s:
+            with ThreadPoolExecutor(max_workers=len(prompts)) as ex:
+                futs = {ex.submit(_one, p): n for n, p in prompts.items()}
+                for f in as_completed(futs):
+                    name = futs[f]
+                    try:
+                        u = f.result()
+                        if u:
+                            out[name] = u
+                            st.write(f"✓ {name}")
+                        else:
+                            st.write(f"✗ {name}: no image")
+                    except Exception as e:
+                        st.write(f"✗ {name}: {e}")
+            st.session_state["forge_dim_views"] = out
+            s.update(label=f"{len(out)} dimensioned view(s) rendered",
+                     state="complete" if out else "error")
     if disabled:
         st.caption("_(Needs a live design image + FAL_KEY — disabled in demo.)_")
-    tdu = st.session_state.get("forge_techdraw_url")
-    if tdu:
-        st.image(tdu, caption="Technical drawing — measured values",
-                 use_container_width=True)
+    dv = st.session_state.get("forge_dim_views") or {}
+    if dv:
+        cols = st.columns(len(dv), gap="small")
+        for i, (name, url) in enumerate(dv.items()):
+            with cols[i]:
+                st.image(url, caption=name, use_container_width=True)
 
 
 def render() -> None:
@@ -282,17 +360,34 @@ def render() -> None:
         unsafe_allow_html=True,
     )
 
+    # The estimate reads the 7 generated views (purpose-built for weight) plus
+    # the base design; falls back to the reference photos if no views yet.
+    view_urls = list((st.session_state.get("views") or {}).values())
+    est_images = ([results[0]] + view_urls) if view_urls else \
+        (image_urls or [results[0]])
+
     alloy, ring_size, target_w, run = weight_inputs("forge")
-    cache_key = f"{results[0]}|{alloy}|{ring_size}"
+
+    if not demo and len(view_urls) < 3:
+        st.warning("For the most accurate weight, generate the **Additional "
+                   "Views** above first — the estimate reads those 7 views "
+                   "(cross-section, underside, top, side, front…).")
+    if not demo and not ring_size.strip():
+        st.info("Tip: enter the **ring size** — it's the scale reference; "
+                "weights are noticeably more accurate with it.")
+
+    cache_key = f"{results[0]}|{alloy}|{ring_size}|v{len(view_urls)}"
     if demo:
         st.caption("🎬 **Demo mode** — sample weights/stones, no engine calls. "
                    "Set a real FAL_KEY and unset FORGE_DEMO for live estimates.")
     if run:
-        with st.status("Estimating metal weight from references "
+        with st.status("Estimating metal weight from the views "
                        "(ensemble)...", expanded=True) as s:
             st.write(f"Models: {we.WEIGHT_MODEL_PRIMARY} + "
                      f"{we.WEIGHT_MODEL_SECONDARY}")
-            est = run_estimate(image_urls, alloy, ring_size)
+            st.write(f"Reading {len(est_images)} image(s) "
+                     f"({len(view_urls)} generated views + base design)")
+            est = run_estimate(est_images, alloy, ring_size)
             st.session_state["forge_estimate"] = {"key": cache_key, "est": est}
             s.update(label="Weight estimate complete", state="complete"
                      if not est.get("_error") else "error")
