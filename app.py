@@ -1198,6 +1198,12 @@ if st.session_state.get("last_results"):
     <div class="section-subtitle">Re-render the design from {_n_views} angles chosen to make weight estimation easier (orthographic, cross-section, underside). Generate all {_n_views} in parallel (~{15 + _n_views * 10} s, ~${_n_views * 0.06:.2f}) or pick individual views to retry.</div>
     """, unsafe_allow_html=True)
 
+    # Base design — the image every view (and the weight estimate) is built from
+    _bd_col = st.columns([1, 2, 1])[1]
+    with _bd_col:
+        st.image(base_design_url, use_container_width=True,
+                 caption="Base design — all views are generated from this image")
+
     # Batch button
     _vbatch_col = st.columns([1, 3, 1])[1]
     with _vbatch_col:
