@@ -272,12 +272,14 @@ def estimate_weight(image_urls: list[str], alloy: str,
         return {"_error": "all weight models failed", "_per_model": raw,
                 "alloy": alloy}
     out = {**reconcile(good, alloy), "montage_url": montage_url}
-    # Stones: take the first model that reported a stone list (mm dims).
+    # Stones + key dimensions: take the first model that reported each.
     for e in good:
-        if e.get("stones"):
+        if e.get("stones") and "stones" not in out:
             out["stones"] = e["stones"]
-            break
+        if e.get("key_dimensions_mm") and "key_dimensions_mm" not in out:
+            out["key_dimensions_mm"] = e["key_dimensions_mm"]
     out.setdefault("stones", [])
+    out.setdefault("key_dimensions_mm", {})
     return out
 
 

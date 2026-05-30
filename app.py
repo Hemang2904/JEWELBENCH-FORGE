@@ -484,79 +484,89 @@ def upload_to_fal(uploaded_file):
     return strip_background_to_white(img_bytes, content_type=content_type)
 
 
+# 7 views chosen to make METAL-VOLUME (weight) estimation easier: orthographic
+# top/side/front fix proportions, the 3/4 gives overall mass, the cross-section
+# and underside reveal band thickness + hollowing (the biggest weight unknowns),
+# and the head macro captures setting volume. Technical Drawing is NOT here — it
+# is generated later in the Bill of Materials once real mm/weight values exist.
+_VIEW_COMMON = (
+    "Preserve every single detail — same head shape, shank profile, metal "
+    "colors (rose-gold stays rose-gold, white-gold stays white-gold), stones, "
+    "proportions, surface finish, prong count. Pure white seamless background "
+    "RGB(255,255,255), subtle soft shadow, professional jewelry product "
+    "photography, ultra-sharp macro detail."
+)
+
 VIEW_PROMPTS = {
-    "Top View": {
+    "Top-Down (plan)": {
         "model": "fal-ai/nano-banana-pro/edit",
         "icon": "⬆️",
         "prompt": (
-            "Re-render this EXACT same ring design from a directly overhead "
-            "top-down camera angle, looking straight down at the head and "
-            "crown with the band visible curving around below. Preserve "
-            "every single detail — same head shape, shank profile, metal "
-            "colors (rose-gold stays rose-gold, white-gold stays white-gold), "
-            "stones, proportions, surface finish, prong count. ONLY the "
-            "camera angle changes. Pure white seamless background "
-            "RGB(255,255,255), subtle soft shadow, professional jewelry "
-            "product photography, ultra-sharp macro detail."
+            "Re-render this EXACT same ring from a perfectly overhead, "
+            "orthographic top-down angle (no perspective), looking straight "
+            "down so the full plan outline and footprint of the head and band "
+            "are visible. ONLY the camera angle changes. " + _VIEW_COMMON
         ),
     },
-    "Side Profile": {
+    "Side Profile (90°)": {
         "model": "fal-ai/nano-banana-pro/edit",
         "icon": "↔️",
         "prompt": (
-            "Re-render this EXACT same ring design from a pure side profile "
-            "view (90-degree side view), showing the full thickness of the "
-            "band and the silhouette of the head from the side. Preserve "
-            "every single detail. ONLY the camera angle changes. Pure white "
-            "seamless background RGB(255,255,255), subtle soft shadow, "
-            "professional jewelry product photography, ultra-sharp macro detail."
+            "Re-render this EXACT same ring from a pure 90-degree side profile "
+            "(orthographic, no perspective), clearly showing the full BAND "
+            "THICKNESS, the shank taper from shoulder to base, and the head "
+            "height silhouette. ONLY the camera angle changes. " + _VIEW_COMMON
         ),
     },
-    "Front View": {
+    "Front Elevation": {
         "model": "fal-ai/nano-banana-pro/edit",
         "icon": "🔭",
         "prompt": (
-            "Re-render this EXACT same ring design from a head-on front "
-            "camera angle, looking directly at the face of the center stone "
-            "with the band curving away symmetrically on both sides. "
-            "Preserve every single detail. ONLY the camera angle changes. "
-            "Pure white seamless background RGB(255,255,255), subtle soft "
-            "shadow, professional jewelry product photography, ultra-sharp "
-            "macro detail."
+            "Re-render this EXACT same ring from a straight head-on front "
+            "elevation, looking directly at the face of the head with the band "
+            "curving away symmetrically, showing head width and shoulder width. "
+            "ONLY the camera angle changes. " + _VIEW_COMMON
         ),
     },
-    "Macro Detail": {
+    "Three-Quarter (45°)": {
+        "model": "fal-ai/nano-banana-pro/edit",
+        "icon": "💍",
+        "prompt": (
+            "Re-render this EXACT same ring from a 45-degree three-quarter hero "
+            "angle that conveys the overall mass and volume of metal — head, "
+            "shoulders, and band all visible. ONLY the camera angle changes. "
+            + _VIEW_COMMON
+        ),
+    },
+    "Band Cross-Section": {
+        "model": "fal-ai/nano-banana-pro/edit",
+        "icon": "✂️",
+        "prompt": (
+            "Re-render this EXACT same ring as a cutaway at the bottom of the "
+            "shank, revealing the BAND'S CROSS-SECTIONAL PROFILE and wall "
+            "thickness (is it solid or hollowed?), with the cut face shown "
+            "flat-on and the rest of the ring in light ghosted outline. This "
+            "reveals how much metal is in the band. " + _VIEW_COMMON
+        ),
+    },
+    "Head & Setting Macro": {
         "model": "fal-ai/nano-banana-pro/edit",
         "icon": "🔬",
         "prompt": (
-            "Re-render this EXACT same ring design as an extreme macro "
-            "close-up of the head and setting, filling the frame with the "
-            "crown, prongs, center stone facets, and immediate shoulder "
-            "area. Preserve every detail. ONLY the camera distance and "
-            "focal length change. Pure white seamless background, subtle "
-            "soft shadow, professional jewelry product photography, "
-            "ultra-sharp macro."
+            "Re-render this EXACT same ring as an extreme macro close-up of the "
+            "head and setting — crown, prongs, basket/gallery, and center stone "
+            "seat — filling the frame so the SETTING METAL VOLUME is clear. "
+            "ONLY the camera distance changes. " + _VIEW_COMMON
         ),
     },
-    "Technical Drawing": {
+    "Underside / Gallery": {
         "model": "fal-ai/nano-banana-pro/edit",
-        "icon": "📐",
+        "icon": "🔄",
         "prompt": (
-            "Re-render this EXACT ring design as a professional jewelry "
-            "technical specification drawing in pure side profile view. "
-            "Add a clean dimensional callout system: thin dark grey arrow "
-            "lines pointing to the band width, the head/setting height, "
-            "the center stone diameter, and the total ring height, each "
-            "labeled in millimeters using standard 1.0-carat round-brilliant "
-            "engagement-ring proportions (band ≈ 2.0 mm, head ≈ 7.0 mm "
-            "diameter, center stone ≈ 6.5 mm, total height ≈ 10.0 mm). "
-            "Add a small 10 mm scale bar in the bottom-right corner for "
-            "reference. The ring itself is rendered photorealistically in "
-            "its actual metal colors and stones — preserve every design "
-            "detail (head shape, prong count, shank profile, decoration). "
-            "Pure white seamless background RGB(255,255,255). The dimension "
-            "lines, arrows, mm labels, and scale bar are crisp dark-grey "
-            "vector overlays drawn ON TOP of the photorealistic ring."
+            "Re-render this EXACT same ring viewed from directly UNDERNEATH, "
+            "showing the gallery rails, the underside of the head/basket, any "
+            "hollowing or open-back, and how much metal sits below the finger. "
+            "ONLY the camera angle changes. " + _VIEW_COMMON
         ),
     },
 }
@@ -1169,13 +1179,14 @@ if confirmed_image_urls and confirmed_enriched_specs:
 if st.session_state.get("last_results"):
     base_design_url = st.session_state["last_results"][0]
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.markdown("""
-    <div class="section-title"><span class="sec-num">06</span> Additional Views</div>
-    <div class="section-subtitle">Re-render the generated design from different camera angles. Generate all 5 in parallel (~60 s, ~$0.30) or pick individual views to retry.</div>
-    """, unsafe_allow_html=True)
-
     view_names = list(VIEW_PROMPTS.keys())
+    _n_views = len(view_names)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="section-title"><span class="sec-num">06</span> Additional Views</div>
+    <div class="section-subtitle">Re-render the design from {_n_views} angles chosen to make weight estimation easier (orthographic, cross-section, underside). Generate all {_n_views} in parallel (~{15 + _n_views * 10} s, ~${_n_views * 0.06:.2f}) or pick individual views to retry.</div>
+    """, unsafe_allow_html=True)
 
     # Batch button
     _vbatch_col = st.columns([1, 3, 1])[1]
@@ -1220,12 +1231,15 @@ if st.session_state.get("last_results"):
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    # Always-visible 5-slot grid
+    # Always-visible grid, wrapped into rows so 6-7 slots stay readable.
     existing_views = st.session_state.get("views", {})
-    view_grid_cols = st.columns(5, gap="small")
+    _cols_per_row = 4
+    _row_cols = []
     for idx, view_name in enumerate(view_names):
+        if idx % _cols_per_row == 0:
+            _row_cols = st.columns(_cols_per_row, gap="small")
         cfg = VIEW_PROMPTS[view_name]
-        with view_grid_cols[idx]:
+        with _row_cols[idx % _cols_per_row]:
             vurl = existing_views.get(view_name)
             if vurl:
                 st.markdown('<div class="result-card">', unsafe_allow_html=True)

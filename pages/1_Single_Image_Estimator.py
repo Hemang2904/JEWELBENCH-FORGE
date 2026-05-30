@@ -149,6 +149,6 @@ if run:
 
 cached = st.session_state.get("si_estimate")
 if cached and cached.get("key") == cache_key:
-    forge_bom.render_priced_bom(cached["est"], target_w, current)
+    forge_bom.render_priced_bom(cached["est"], target_w, current, ring_size)
 else:
     st.info("Set alloy / ring size / target, then **Estimate weight & price**.")

@@ -42,6 +42,39 @@ def _pretty(alloy: str) -> str:
     return alloy.replace("_", " ").title()
 
 
+def _tech_drawing_prompt(metal: dict, kd: dict, center: dict | None,
+                         ring_size: str) -> str:
+    """Build the technical-drawing prompt from the MEASURED values, so the
+    callouts reflect the real estimate (not generic proportions)."""
+    parts = []
+    if kd.get("band_width"):
+        parts.append(f"band width {kd['band_width']} mm")
+    if kd.get("band_thickness"):
+        parts.append(f"band thickness {kd['band_thickness']} mm")
+    if center:
+        seg = f"center {center.get('shape', 'round')}"
+        if center.get("length_mm"):
+            seg += f" {center['length_mm']} mm"
+        if center.get("carat_each"):
+            seg += f" ({center['carat_each']:.2f} ct)"
+        parts.append(seg)
+    if ring_size:
+        parts.append(f"ring size US {ring_size}")
+    parts.append(f"finished {_pretty(metal['alloy'])} net weight "
+                 f"{metal['net_weight_g']:.2f} g")
+    dims = "; ".join(parts)
+    return (
+        "Re-render this EXACT ring design as a professional jewelry technical "
+        "specification drawing in pure side profile view. Add a clean "
+        "dimensional callout system — thin dark-grey arrow lines with mm "
+        f"labels — using THESE measured values: {dims}. Add a 10 mm scale bar "
+        "in the bottom-right corner. The ring stays photorealistic in its "
+        "actual metal colors and stones (preserve every design detail); the "
+        "dimension lines, mm labels, and scale bar are crisp dark-grey vector "
+        "overlays on a pure white RGB(255,255,255) background."
+    )
+
+
 def _demo_estimate(alloy: str) -> dict:
     """Offline sample estimate (no fal calls) for FORGE_DEMO=1 previews."""
     mock = [
@@ -58,6 +91,7 @@ def _demo_estimate(alloy: str) -> dict:
         {"location": "halo", "shape": "round", "count": 12, "length_mm": 1.3},
         {"location": "shank", "shape": "round", "count": 20, "length_mm": 1.0},
     ]
+    out["key_dimensions_mm"] = {"band_width": 2.2, "band_thickness": 1.8}
     return out
 
 
@@ -92,7 +126,7 @@ def run_estimate(image_urls: list[str], alloy: str, ring_size: str) -> dict:
 
 
 def render_priced_bom(est: dict, target_w: float = 0.0,
-                      design_ref: str = "") -> None:
+                      design_ref: str = "", ring_size: str = "") -> None:
     """Scale to target, price, and draw the full BoM. Shared by both flows."""
     if est.get("_error"):
         st.error(f"Weight estimate failed: {est['_error']}")
@@ -188,6 +222,46 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         use_container_width=True,
     )
 
+    # ── Technical drawing — generated HERE, with the measured values ──────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("#### 📐 Technical drawing")
+    st.caption("Dimensioned spec drawing rendered from the measured values "
+               "above (band, center stone, ring size, weight).")
+    kd = est.get("key_dimensions_mm") or {}
+    center = (max(dia["groups"], key=lambda g: g.get("carat_each", 0))
+              if dia["groups"] else None)
+    bad_ref = (not design_ref) or str(design_ref).startswith("demo://")
+    disabled = is_demo() or bad_ref
+    if st.button("Generate technical drawing", key="forge_techdraw",
+                 disabled=disabled, use_container_width=True):
+        with st.spinner("Rendering dimensioned technical drawing..."):
+            try:
+                import fal_client
+                result = fal_client.subscribe(
+                    "fal-ai/nano-banana-pro/edit",
+                    arguments={
+                        "image_urls": [design_ref],
+                        "prompt": _tech_drawing_prompt(metal, kd, center,
+                                                       ring_size),
+                        "num_images": 1, "resolution": "2K",
+                        "aspect_ratio": "auto", "output_format": "png",
+                    },
+                )
+                url = (result.get("images") or [{}])[0].get("url") \
+                    or (result.get("image") or {}).get("url")
+                if url:
+                    st.session_state["forge_techdraw_url"] = url
+                else:
+                    st.warning("No drawing returned.")
+            except Exception as e:
+                st.error(f"Technical drawing failed: {e}")
+    if disabled:
+        st.caption("_(Needs a live design image + FAL_KEY — disabled in demo.)_")
+    tdu = st.session_state.get("forge_techdraw_url")
+    if tdu:
+        st.image(tdu, caption="Technical drawing — measured values",
+                 use_container_width=True)
+
 
 def render() -> None:
     """Mix & Match end-of-flow BoM. No-op until a design exists."""
@@ -229,4 +303,4 @@ def render() -> None:
                 "price**.")
         return
 
-    render_priced_bom(cached["est"], target_w, results[0])
+    render_priced_bom(cached["est"], target_w, results[0], ring_size)
