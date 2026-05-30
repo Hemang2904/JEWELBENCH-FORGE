@@ -1,17 +1,17 @@
-"""JEWELBENCH-FORGE end-of-flow Bill of Materials.
+"""JEWELBENCH-FORGE Bill of Materials — shared weight→price rendering.
 
-Rendered LAST (after the design + additional views) so AI/token spend accrues
-in order and the BoM reflects the final design. Flow:
+Used by two flows:
+  * Mix & Match (app.py)            — render() reads the multi-reference design
+  * Single Image Estimator (pages/) — calls weight_inputs / run_estimate /
+                                      render_priced_bom directly
 
-    1. Ensemble weight estimate from all reference images (Gemini + Sonnet)
+Pipeline (same for both):
+    1. Ensemble weight estimate (Gemini + Sonnet) -> net + metal weight
     2. User picks alloy + ring size + TARGET net weight
-    3. Estimate is scaled to the target; dimensions derived for display
+    3. Estimate scaled to target
     4. Stones measured in mm -> carat via the FIXED gem chart
     5. Pricing: net-weight metal value (+markup) + carat-based stones
-    6. Shank shown as a min..max range; JSON/MD download
-
-Encapsulated as render(st_session) so the large app.py only needs a one-line
-call at the very end.
+    6. Shank shown as a min..max range; JSON download
 """
 
 from __future__ import annotations
@@ -34,13 +34,16 @@ _ALLOYS = [
 ]
 
 
+def is_demo() -> bool:
+    return bool(os.environ.get("FORGE_DEMO"))
+
+
 def _pretty(alloy: str) -> str:
     return alloy.replace("_", " ").title()
 
 
 def _demo_estimate(alloy: str) -> dict:
-    """Offline sample estimate (no fal calls) so the BoM UI can be previewed
-    without FAL_KEY. Enabled via FORGE_DEMO=1."""
+    """Offline sample estimate (no fal calls) for FORGE_DEMO=1 previews."""
     mock = [
         {"_model": "google/gemini-2.5-pro (demo)", "total_metal_volume_mm3": 330,
          "shank_volume_mm3": 185, "head_volume_mm3": 115,
@@ -58,70 +61,43 @@ def _demo_estimate(alloy: str) -> dict:
     return out
 
 
-def render() -> None:
-    """Draw the FORGE Bill of Materials section. No-op until a design exists."""
-    demo = bool(os.environ.get("FORGE_DEMO"))
-    results = st.session_state.get("last_results")
-    image_urls = st.session_state.get("last_image_urls") or []
-    if not results and demo:
-        results = ["demo://sample-design"]  # placeholder so the section renders
-    if not results:
-        return
+def weight_inputs(prefix: str) -> tuple[str, str, float, bool]:
+    """Render the alloy / ring-size / target-weight inputs + run button.
 
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-title"><span class="sec-num">07</span> '
-        'Bill of Materials</div>'
-        '<div class="section-subtitle">Weight estimated from all reference '
-        'images, then priced to your target.</div>',
-        unsafe_allow_html=True,
-    )
-
-    # ── Inputs ────────────────────────────────────────────────────────────────
+    `prefix` keeps widget keys unique across pages. Returns
+    (alloy, ring_size, target_weight_g, run_clicked).
+    """
     c1, c2, c3 = st.columns(3, gap="medium")
     with c1:
         alloy = st.selectbox("Metal / alloy", _ALLOYS, index=0,
-                             format_func=_pretty, key="forge_alloy")
+                             format_func=_pretty, key=f"{prefix}_alloy")
     with c2:
         ring_size = st.text_input("Ring size (US) — scale reference",
                                   value="", placeholder="e.g. 6.5",
-                                  key="forge_ring_size")
+                                  key=f"{prefix}_ring_size")
     with c3:
         target_w = st.number_input("Target NET weight (g)", min_value=0.0,
-                                   value=0.0, step=0.1, key="forge_target_w",
+                                   value=0.0, step=0.1, key=f"{prefix}_target_w",
                                    help="0 = use the estimated weight as-is")
-
     run = st.button("⚖️ Estimate weight & price", type="primary",
-                    key="forge_run", use_container_width=True)
+                    key=f"{prefix}_run", use_container_width=True)
+    return alloy, ring_size, target_w, run
 
-    # Cache the (expensive) ensemble estimate per design+alloy+ring-size.
-    cache_key = f"{results[0]}|{alloy}|{ring_size}"
-    if demo:
-        st.caption("🎬 **Demo mode** — sample weights/stones, no engine calls. "
-                   "Set a real FAL_KEY and unset FORGE_DEMO for live estimates.")
-    if run:
-        with st.status("Estimating metal weight from references "
-                       "(ensemble)...", expanded=True) as s:
-            st.write(f"Models: {we.WEIGHT_MODEL_PRIMARY} + "
-                     f"{we.WEIGHT_MODEL_SECONDARY}")
-            est = _demo_estimate(alloy) if demo else \
-                we.estimate_weight(image_urls, alloy, ring_size or None)
-            st.session_state["forge_estimate"] = {"key": cache_key, "est": est}
-            s.update(label="Weight estimate complete", state="complete"
-                     if not est.get("_error") else "error")
 
-    cached = st.session_state.get("forge_estimate")
-    if not cached or cached.get("key") != cache_key:
-        st.info("Set alloy / ring size / target, then **Estimate weight & "
-                "price**.")
-        return
+def run_estimate(image_urls: list[str], alloy: str, ring_size: str) -> dict:
+    """Run the ensemble estimate (or the demo estimate in FORGE_DEMO mode)."""
+    if is_demo():
+        return _demo_estimate(alloy)
+    return we.estimate_weight(image_urls, alloy, ring_size or None)
 
-    est = cached["est"]
+
+def render_priced_bom(est: dict, target_w: float = 0.0,
+                      design_ref: str = "") -> None:
+    """Scale to target, price, and draw the full BoM. Shared by both flows."""
     if est.get("_error"):
         st.error(f"Weight estimate failed: {est['_error']}")
         return
 
-    # Scale to target net weight if provided.
     if target_w and target_w > 0:
         est = we.scale_to_target(est, float(target_w))
 
@@ -140,10 +116,8 @@ def render() -> None:
         f"models: {', '.join(str(m) for m in est.get('models', []))}"
     )
 
-    # ── Stones via FIXED chart ───────────────────────────────────────────────
     stone_groups = sizing.price_dimensions_to_groups(est.get("stones", []))
 
-    # ── Price ─────────────────────────────────────────────────────────────────
     gold = get_gold_rates()
     diamond_rates = load_diamond_rates()
     bom = price_bom(est, stone_groups, gold, diamond_rates)
@@ -151,7 +125,6 @@ def render() -> None:
     metal = bom["metal"]
     dia = bom["diamonds"]
     gt = bom["grand_total"]
-    fx = gold["usd_inr"]
 
     st.markdown("<br>", unsafe_allow_html=True)
     g1, g2, g3 = st.columns(3, gap="medium")
@@ -198,12 +171,11 @@ def render() -> None:
 """
             )
 
-    # ── Download ──────────────────────────────────────────────────────────────
     sku = "JBF-" + datetime.datetime.now().strftime("%y%m%d%H%M")
     payload = {
         "sku": sku,
         "generated_at": datetime.datetime.now().isoformat(timespec="seconds"),
-        "design_image": results[0],
+        "design_image": design_ref,
         "weight_estimate": est,
         "bom": bom,
         "gold_rates": gold,
@@ -215,3 +187,46 @@ def render() -> None:
         mime="application/json",
         use_container_width=True,
     )
+
+
+def render() -> None:
+    """Mix & Match end-of-flow BoM. No-op until a design exists."""
+    demo = is_demo()
+    results = st.session_state.get("last_results")
+    image_urls = st.session_state.get("last_image_urls") or []
+    if not results and demo:
+        results = ["demo://sample-design"]
+    if not results:
+        return
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="section-title"><span class="sec-num">07</span> '
+        'Bill of Materials</div>'
+        '<div class="section-subtitle">Weight estimated from all reference '
+        'images, then priced to your target.</div>',
+        unsafe_allow_html=True,
+    )
+
+    alloy, ring_size, target_w, run = weight_inputs("forge")
+    cache_key = f"{results[0]}|{alloy}|{ring_size}"
+    if demo:
+        st.caption("🎬 **Demo mode** — sample weights/stones, no engine calls. "
+                   "Set a real FAL_KEY and unset FORGE_DEMO for live estimates.")
+    if run:
+        with st.status("Estimating metal weight from references "
+                       "(ensemble)...", expanded=True) as s:
+            st.write(f"Models: {we.WEIGHT_MODEL_PRIMARY} + "
+                     f"{we.WEIGHT_MODEL_SECONDARY}")
+            est = run_estimate(image_urls, alloy, ring_size)
+            st.session_state["forge_estimate"] = {"key": cache_key, "est": est}
+            s.update(label="Weight estimate complete", state="complete"
+                     if not est.get("_error") else "error")
+
+    cached = st.session_state.get("forge_estimate")
+    if not cached or cached.get("key") != cache_key:
+        st.info("Set alloy / ring size / target, then **Estimate weight & "
+                "price**.")
+        return
+
+    render_priced_bom(cached["est"], target_w, results[0])
