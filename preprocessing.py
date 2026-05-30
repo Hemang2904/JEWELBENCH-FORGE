@@ -183,6 +183,12 @@ def enrich_description(image_url: str, user_desc: str) -> str:
     (>= 80 char) description.
     """
     user_desc = (user_desc or "").strip()
+    # AI enrichment runs on the deprecated any-llm/vision endpoint, which returns
+    # unreliable ("random") descriptions — so it's OFF by default: we use the
+    # user's own text verbatim. Re-enable with ENABLE_AI_ENRICHMENT=1 once the
+    # vision endpoint is migrated.
+    if os.environ.get("ENABLE_AI_ENRICHMENT", "0") != "1":
+        return user_desc
     if len(user_desc) >= 80:
         return user_desc
 

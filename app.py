@@ -856,9 +856,7 @@ else:
 # ── PHASE A: ENRICH ──────────────────────────────────────────────────────────
 
 if generate_clicked and _ready:
-    # Every uploaded image is enriched (blank descriptions are AI-generated),
-    # so the review covers all references — not just the ones you typed.
-    active_specs = [s for s in image_specs if s["file"]]
+    active_specs = [s for s in image_specs if s["file"] and s["description"]]
 
     with st.status("Analyzing references — phases 1 & 2 of 5...", expanded=True) as prep_status:
         st.write("🧹 Phase 1/5 — Cleaning reference backgrounds...")
@@ -901,8 +899,8 @@ confirmed_enriched_specs = None
 if _enrich_pending:
     st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
     st.markdown("""
-<div class="section-title"><span class="sec-num">03b</span> Review AI Descriptions</div>
-<div class="section-subtitle">The AI has read your reference images. Edit any description before rendering — precision here is the single biggest lever for output quality.</div>
+<div class="section-title"><span class="sec-num">03b</span> Review Descriptions</div>
+<div class="section-subtitle">Edit any component description before rendering — precision here is the single biggest lever for output quality.</div>
 """, unsafe_allow_html=True)
 
     _ep_specs = _enrich_pending["enriched_specs"]
@@ -1166,122 +1164,6 @@ if confirmed_image_urls and confirmed_enriched_specs:
 
 
 
-# ── ADDITIONAL VIEWS ──────────────────────────────────────────────────────────
-
-if st.session_state.get("last_results"):
-    base_design_url = st.session_state["last_results"][0]
-
-    view_names = list(VIEW_PROMPTS.keys())
-    _n_views = len(view_names)
-
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class="section-title"><span class="sec-num">06</span> Additional Views</div>
-    <div class="section-subtitle">Re-render the design from {_n_views} angles chosen to make weight estimation easier (orthographic, cross-section, underside). Generate all {_n_views} in parallel (~{15 + _n_views * 10} s, ~${_n_views * 0.06:.2f}) or pick individual views to retry.</div>
-    """, unsafe_allow_html=True)
-
-    # Base design — the image every view (and the weight estimate) is built from
-    _bd_col = st.columns([1, 2, 1])[1]
-    with _bd_col:
-        st.image(base_design_url, use_container_width=True,
-                 caption="Base design — all views are generated from this image")
-
-    # Batch button
-    _vbatch_col = st.columns([1, 3, 1])[1]
-    with _vbatch_col:
-        if st.button("⚡ Generate All Views (parallel)", key="view_btn_all", use_container_width=True, type="primary"):
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            with st.status(f"Rendering {len(view_names)} views in parallel...", expanded=True) as _vs:
-                _vresults = {}
-                _verrors = {}
-                with ThreadPoolExecutor(max_workers=len(view_names)) as executor:
-                    futures = {
-                        executor.submit(
-                            generate_view,
-                            base_design_url,
-                            VIEW_PROMPTS[name]["prompt"],
-                            VIEW_PROMPTS[name]["model"],
-                        ): name
-                        for name in view_names
-                    }
-                    for future in as_completed(futures):
-                        name = futures[future]
-                        try:
-                            result = future.result()
-                            url = extract_image_url(result)
-                            if url:
-                                _vresults[name] = url
-                                st.write(f"✓ {name}")
-                            else:
-                                _verrors[name] = "no image returned"
-                        except Exception as e:
-                            _verrors[name] = str(e)
-                if _vresults:
-                    st.session_state.setdefault("views", {}).update(_vresults)
-                for n, msg in _verrors.items():
-                    st.warning(f"{n} failed: {msg}")
-                _vs.update(
-                    label=f"Done — {len(_vresults)}/{len(view_names)} views rendered",
-                    state="complete" if not _verrors else "error",
-                )
-            if _vresults:
-                st.toast(f"{len(_vresults)} view(s) rendered!", icon="✨")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    # Always-visible grid, wrapped into rows so 6-7 slots stay readable.
-    existing_views = st.session_state.get("views", {})
-    _cols_per_row = 4
-    _row_cols = []
-    for idx, view_name in enumerate(view_names):
-        if idx % _cols_per_row == 0:
-            _row_cols = st.columns(_cols_per_row, gap="small")
-        cfg = VIEW_PROMPTS[view_name]
-        with _row_cols[idx % _cols_per_row]:
-            vurl = existing_views.get(view_name)
-            if vurl:
-                st.markdown('<div class="result-card">', unsafe_allow_html=True)
-                st.image(vurl, use_container_width=True)
-                st.markdown(
-                    f"""<div class="result-label">
-                        <span style="font-size:0.78rem">{view_name}</span>
-                        <a href="{vurl}" target="_blank"
-                           style="color:var(--cyan);text-decoration:none;font-size:0.75rem;font-weight:600;">
-                            ↓
-                        </a>
-                    </div></div>""",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f'<div class="view-placeholder">'
-                    f'<span class="view-placeholder-icon">{cfg["icon"]}</span>'
-                    f'<span>{view_name}</span>'
-                    f'<span style="font-size:0.7rem;opacity:0.6;">not rendered</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
-                )
-
-            # Individual generate button below each slot
-            if st.button(
-                "Generate" if not vurl else "Re-render",
-                key=f"view_btn_{view_name}",
-                use_container_width=True,
-            ):
-                with st.spinner(f"Rendering {view_name}..."):
-                    try:
-                        result = generate_view(base_design_url, cfg["prompt"], cfg["model"])
-                        url = extract_image_url(result)
-                        if url:
-                            st.session_state.setdefault("views", {})[view_name] = url
-                            st.toast(f"{view_name} ready!", icon=cfg["icon"])
-                            st.rerun()
-                        else:
-                            st.warning(f"{view_name} produced no image.")
-                    except Exception as e:
-                        st.error(f"{view_name} failed: {e}")
-
-
 # ── REFINEMENT ────────────────────────────────────────────────────────────────
 
 if st.session_state.get("last_results"):
@@ -1467,8 +1349,165 @@ if st.session_state.get("last_results"):
                         if r_best_diagnosis.get("suggestion"):
                             st.markdown(f"**Validator's suggestion:** {r_best_diagnosis['suggestion']}")
                 st.toast("Refined design ready!", icon="✨")
+
+                # The refined design becomes the ACTIVE design, and we
+                # regenerate the additional views from it (the old views are
+                # stale) so they + the BoM reflect the refinement.
+                st.session_state["last_results"] = [r_best_url]
+                st.session_state["last_bom_url"] = r_best_url
+                st.session_state["last_prompt"] = refined_prompt
+                st.session_state.pop("forge_estimate", None)  # stale estimate
+
+                _rv_names = list(VIEW_PROMPTS.keys())
+                with st.status(
+                    f"Regenerating {len(_rv_names)} views from the refined "
+                    "design...", expanded=True
+                ) as _rv:
+                    from concurrent.futures import (ThreadPoolExecutor,
+                                                    as_completed)
+                    _newviews = {}
+                    with ThreadPoolExecutor(max_workers=len(_rv_names)) as _ex:
+                        _futs = {
+                            _ex.submit(generate_view, r_best_url,
+                                       VIEW_PROMPTS[n]["prompt"],
+                                       VIEW_PROMPTS[n]["model"]): n
+                            for n in _rv_names
+                        }
+                        for _f in as_completed(_futs):
+                            _n = _futs[_f]
+                            try:
+                                _u = extract_image_url(_f.result())
+                                if _u:
+                                    _newviews[_n] = _u
+                                    st.write(f"✓ {_n}")
+                                else:
+                                    st.write(f"✗ {_n}: no image")
+                            except Exception as _e:
+                                st.write(f"✗ {_n}: {_e}")
+                    st.session_state["views"] = _newviews
+                    _rv.update(
+                        label=f"{len(_newviews)} views regenerated from the "
+                        "refined design",
+                        state="complete" if _newviews else "error",
+                    )
             else:
                 st.error("Refinement failed. Please try again.")
+
+
+# ── ADDITIONAL VIEWS ──────────────────────────────────────────────────────────
+
+if st.session_state.get("last_results"):
+    base_design_url = st.session_state["last_results"][0]
+
+    view_names = list(VIEW_PROMPTS.keys())
+    _n_views = len(view_names)
+
+    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="section-title"><span class="sec-num">06</span> Additional Views</div>
+    <div class="section-subtitle">Re-render the design from {_n_views} angles chosen to make weight estimation easier (orthographic, cross-section, underside). Generate all {_n_views} in parallel (~{15 + _n_views * 10} s, ~${_n_views * 0.06:.2f}) or pick individual views to retry.</div>
+    """, unsafe_allow_html=True)
+
+    # Base design — the image every view (and the weight estimate) is built from
+    _bd_col = st.columns([1, 2, 1])[1]
+    with _bd_col:
+        st.image(base_design_url, use_container_width=True,
+                 caption="Base design — all views are generated from this image")
+
+    # Batch button
+    _vbatch_col = st.columns([1, 3, 1])[1]
+    with _vbatch_col:
+        if st.button("⚡ Generate All Views (parallel)", key="view_btn_all", use_container_width=True, type="primary"):
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with st.status(f"Rendering {len(view_names)} views in parallel...", expanded=True) as _vs:
+                _vresults = {}
+                _verrors = {}
+                with ThreadPoolExecutor(max_workers=len(view_names)) as executor:
+                    futures = {
+                        executor.submit(
+                            generate_view,
+                            base_design_url,
+                            VIEW_PROMPTS[name]["prompt"],
+                            VIEW_PROMPTS[name]["model"],
+                        ): name
+                        for name in view_names
+                    }
+                    for future in as_completed(futures):
+                        name = futures[future]
+                        try:
+                            result = future.result()
+                            url = extract_image_url(result)
+                            if url:
+                                _vresults[name] = url
+                                st.write(f"✓ {name}")
+                            else:
+                                _verrors[name] = "no image returned"
+                        except Exception as e:
+                            _verrors[name] = str(e)
+                if _vresults:
+                    st.session_state.setdefault("views", {}).update(_vresults)
+                for n, msg in _verrors.items():
+                    st.warning(f"{n} failed: {msg}")
+                _vs.update(
+                    label=f"Done — {len(_vresults)}/{len(view_names)} views rendered",
+                    state="complete" if not _verrors else "error",
+                )
+            if _vresults:
+                st.toast(f"{len(_vresults)} view(s) rendered!", icon="✨")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Always-visible grid, wrapped into rows so 6-7 slots stay readable.
+    existing_views = st.session_state.get("views", {})
+    _cols_per_row = 4
+    _row_cols = []
+    for idx, view_name in enumerate(view_names):
+        if idx % _cols_per_row == 0:
+            _row_cols = st.columns(_cols_per_row, gap="small")
+        cfg = VIEW_PROMPTS[view_name]
+        with _row_cols[idx % _cols_per_row]:
+            vurl = existing_views.get(view_name)
+            if vurl:
+                st.markdown('<div class="result-card">', unsafe_allow_html=True)
+                st.image(vurl, use_container_width=True)
+                st.markdown(
+                    f"""<div class="result-label">
+                        <span style="font-size:0.78rem">{view_name}</span>
+                        <a href="{vurl}" target="_blank"
+                           style="color:var(--cyan);text-decoration:none;font-size:0.75rem;font-weight:600;">
+                            ↓
+                        </a>
+                    </div></div>""",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f'<div class="view-placeholder">'
+                    f'<span class="view-placeholder-icon">{cfg["icon"]}</span>'
+                    f'<span>{view_name}</span>'
+                    f'<span style="font-size:0.7rem;opacity:0.6;">not rendered</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+            # Individual generate button below each slot
+            if st.button(
+                "Generate" if not vurl else "Re-render",
+                key=f"view_btn_{view_name}",
+                use_container_width=True,
+            ):
+                with st.spinner(f"Rendering {view_name}..."):
+                    try:
+                        result = generate_view(base_design_url, cfg["prompt"], cfg["model"])
+                        url = extract_image_url(result)
+                        if url:
+                            st.session_state.setdefault("views", {})[view_name] = url
+                            st.toast(f"{view_name} ready!", icon=cfg["icon"])
+                            st.rerun()
+                        else:
+                            st.warning(f"{view_name} produced no image.")
+                    except Exception as e:
+                        st.error(f"{view_name} failed: {e}")
 
 
 # ── BILL OF MATERIALS (FORGE: weight → target → dimensions → price) ───────────
