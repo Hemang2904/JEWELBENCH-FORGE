@@ -492,17 +492,26 @@ def upload_to_fal(uploaded_file):
 # and underside reveal band thickness + hollowing (the biggest weight unknowns),
 # and the head macro captures setting volume. Technical Drawing is NOT here — it
 # is generated later in the Bill of Materials once real mm/weight values exist.
+# View renderer is swappable — if nano-banana keeps drifting, set VIEW_MODEL to
+# e.g. fal-ai/flux-pro/kontext (built for consistent object edits).
+VIEW_MODEL = os.environ.get("VIEW_MODEL", "fal-ai/nano-banana-pro/edit")
+
 _VIEW_COMMON = (
-    "Preserve every single detail — same head shape, shank profile, metal "
-    "colors (rose-gold stays rose-gold, white-gold stays white-gold), stones, "
-    "proportions, surface finish, prong count. Pure white seamless background "
+    "CRITICAL — CONSISTENCY: this is the SAME single physical ring being "
+    "photographed again, only from a new camera viewpoint. Its design is FIXED "
+    "and must be reproduced IDENTICALLY: same figural/animal motif and face, "
+    "same engraving, scrollwork and texture pattern, the exact same number, "
+    "shape and placement of every stone, same metal color and finish, same head "
+    "and shank shape and proportions. Do NOT redesign, restyle, add, remove, "
+    "reinterpret, beautify or change ANY element — match the input image "
+    "exactly. ONLY the camera angle changes. Pure white seamless background "
     "RGB(255,255,255), subtle soft shadow, professional jewelry product "
     "photography, ultra-sharp macro detail."
 )
 
 VIEW_PROMPTS = {
     "Top-Down (plan)": {
-        "model": "fal-ai/nano-banana-pro/edit",
+        "model": VIEW_MODEL,
         "icon": "⬆️",
         "prompt": (
             "Re-render this EXACT same ring from a perfectly overhead, "
@@ -512,7 +521,7 @@ VIEW_PROMPTS = {
         ),
     },
     "Side Profile (90°)": {
-        "model": "fal-ai/nano-banana-pro/edit",
+        "model": VIEW_MODEL,
         "icon": "↔️",
         "prompt": (
             "Re-render this EXACT same ring from a pure 90-degree side profile "
@@ -522,7 +531,7 @@ VIEW_PROMPTS = {
         ),
     },
     "Front Elevation": {
-        "model": "fal-ai/nano-banana-pro/edit",
+        "model": VIEW_MODEL,
         "icon": "🔭",
         "prompt": (
             "Re-render this EXACT same ring from a straight head-on front "
@@ -532,7 +541,7 @@ VIEW_PROMPTS = {
         ),
     },
     "Three-Quarter (45°)": {
-        "model": "fal-ai/nano-banana-pro/edit",
+        "model": VIEW_MODEL,
         "icon": "💍",
         "prompt": (
             "Re-render this EXACT same ring from a 45-degree three-quarter hero "
@@ -542,7 +551,7 @@ VIEW_PROMPTS = {
         ),
     },
     "Band Edge & Thickness": {
-        "model": "fal-ai/nano-banana-pro/edit",
+        "model": VIEW_MODEL,
         "icon": "📏",
         "prompt": (
             "Re-render this EXACT same ring zoomed in on the BOTTOM of the "
@@ -556,7 +565,7 @@ VIEW_PROMPTS = {
         ),
     },
     "Head & Setting Macro": {
-        "model": "fal-ai/nano-banana-pro/edit",
+        "model": VIEW_MODEL,
         "icon": "🔬",
         "prompt": (
             "Re-render this EXACT same ring as an extreme macro close-up of the "
@@ -566,7 +575,7 @@ VIEW_PROMPTS = {
         ),
     },
     "Underside / Gallery": {
-        "model": "fal-ai/nano-banana-pro/edit",
+        "model": VIEW_MODEL,
         "icon": "🔄",
         "prompt": (
             "Re-render this EXACT same ring viewed from directly UNDERNEATH, "
@@ -578,7 +587,8 @@ VIEW_PROMPTS = {
 }
 
 
-def generate_view(base_url, view_prompt, model="fal-ai/nano-banana-pro/edit"):
+def generate_view(base_url, view_prompt, model=None):
+    model = model or VIEW_MODEL
     return fal_client.subscribe(
         model,
         arguments={
