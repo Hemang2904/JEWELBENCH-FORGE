@@ -813,49 +813,6 @@ with spec_col2:
 additional_specs = {"metal": metal, "stones": stones, "dimensions": dimensions, "notes": notes}
 
 
-# ── AI PIPELINE VISUALIZATION ────────────────────────────────────────────────
-
-st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-st.markdown("""
-<div class="section-title"><span class="sec-num">03</span> AI Pipeline</div>
-<div class="section-subtitle">Five-stage process — from raw uploads to a validated, production-ready design</div>
-""", unsafe_allow_html=True)
-
-st.markdown(f"""
-<div class="pipeline-wrap">
-  <div class="pipeline-step">
-    <div class="pipeline-num">1</div>
-    <span class="pipeline-icon">🧹</span>
-    <span class="pipeline-label">Background Strip</span>
-    <span class="pipeline-model">Precision background removal</span>
-  </div>
-  <div class="pipeline-step">
-    <div class="pipeline-num">2</div>
-    <span class="pipeline-icon">🔍</span>
-    <span class="pipeline-label">Vision Enrich</span>
-    <span class="pipeline-model">Reads each reference deeply</span>
-  </div>
-  <div class="pipeline-step">
-    <div class="pipeline-num">3</div>
-    <span class="pipeline-icon">📝</span>
-    <span class="pipeline-label">Prompt Build</span>
-    <span class="pipeline-model">Silhouette · finish · color rules</span>
-  </div>
-  <div class="pipeline-step">
-    <div class="pipeline-num">4</div>
-    <span class="pipeline-icon">✨</span>
-    <span class="pipeline-label">Render @ 2K</span>
-    <span class="pipeline-model">JewelBench multi-reference engine</span>
-  </div>
-  <div class="pipeline-step">
-    <div class="pipeline-num">5</div>
-    <span class="pipeline-icon">🎯</span>
-    <span class="pipeline-label">Validate &amp; Retry</span>
-    <span class="pipeline-model">JewelBench AI · threshold {VALIDATION_THRESHOLD}% · up to {MAX_VALIDATION_TRIES} tries</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
 
 # ── PRE-FLIGHT CHECKLIST ─────────────────────────────────────────────────────
 
