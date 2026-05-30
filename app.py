@@ -492,9 +492,10 @@ def upload_to_fal(uploaded_file):
 # and underside reveal band thickness + hollowing (the biggest weight unknowns),
 # and the head macro captures setting volume. Technical Drawing is NOT here — it
 # is generated later in the Bill of Materials once real mm/weight values exist.
-# View renderer is swappable — if nano-banana keeps drifting, set VIEW_MODEL to
-# e.g. fal-ai/flux-pro/kontext (built for consistent object edits).
-VIEW_MODEL = os.environ.get("VIEW_MODEL", "fal-ai/nano-banana-pro/edit")
+# View renderer: Flux Kontext is purpose-built for consistent object edits
+# (keeps the same ring across angles). Override VIEW_MODEL to go back to
+# fal-ai/nano-banana-pro/edit if preferred.
+VIEW_MODEL = os.environ.get("VIEW_MODEL", "fal-ai/flux-pro/kontext")
 
 _VIEW_COMMON = (
     "CRITICAL — CONSISTENCY: this is the SAME single physical ring being "
@@ -588,18 +589,32 @@ VIEW_PROMPTS = {
 
 
 def generate_view(base_url, view_prompt, model=None):
+    """Render one camera view. Builds model-appropriate arguments because
+    Flux Kontext (image_url, guidance) and nano-banana (image_urls, resolution)
+    have different input schemas."""
     model = model or VIEW_MODEL
-    return fal_client.subscribe(
-        model,
-        arguments={
+    m = model.lower()
+    if "kontext" in m or "/flux" in m:
+        # Flux Kontext: built for consistent edits. Omit aspect_ratio to keep
+        # the input image's aspect; low guidance keeps it faithful to the input.
+        args = {
+            "image_url": base_url,
+            "prompt": view_prompt,
+            "num_images": 1,
+            "guidance_scale": 3.5,
+            "output_format": "png",
+            "safety_tolerance": "5",
+        }
+    else:
+        args = {
             "image_urls": [base_url],
             "prompt": view_prompt,
             "num_images": 1,
             "resolution": "2K",
             "aspect_ratio": "auto",
             "output_format": "png",
-        },
-    )
+        }
+    return fal_client.subscribe(model, arguments=args)
 
 
 def extract_image_url(result):

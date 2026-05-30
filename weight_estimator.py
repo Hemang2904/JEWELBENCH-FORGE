@@ -4,7 +4,7 @@ Flow
 ----
 1. The (up to 5) reference images are stitched into one montage so a single
    vision call sees every angle at once ("use all 5 images").
-2. An ENSEMBLE of vision models (Gemini 3 Pro + Claude Sonnet 4.5 by default)
+2. An ENSEMBLE of vision models (Gemini 2.5 Pro + Claude Sonnet 4.5 by default)
    each reads the geometry and returns *volumes in mm^3* — not grams. Models
    are good at "how big", bad at "how heavy", so we keep the heavy step in code.
 3. Code converts volume -> weight deterministically:
@@ -33,9 +33,10 @@ import urllib.request
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-# Latest Gemini (OpenRouter id; any-llm/vision forwards to OpenRouter).
+# gemini-3-pro-preview isn't enabled on fal's any-llm/vision endpoint, so we use
+# gemini-2.5-pro (the latest Gemini that works there) + Claude Sonnet 4.5.
 WEIGHT_MODEL_PRIMARY = os.environ.get(
-    "WEIGHT_MODEL_PRIMARY", "google/gemini-3-pro-preview"
+    "WEIGHT_MODEL_PRIMARY", "google/gemini-2.5-pro"
 )
 WEIGHT_MODEL_SECONDARY = os.environ.get(
     "WEIGHT_MODEL_SECONDARY", "anthropic/claude-sonnet-4.5"
@@ -46,10 +47,7 @@ VISION_ENDPOINT = os.environ.get("WEIGHT_VISION_ENDPOINT", "fal-ai/any-llm/visio
 # ensemble reliably ends up with two independent estimates.
 WEIGHT_FALLBACK_MODELS = [
     m.strip() for m in os.environ.get(
-        "WEIGHT_FALLBACK_MODELS",
-        # gemini-2.5-pro first so a Gemini stays in the ensemble even if the
-        # endpoint hasn't whitelisted gemini-3 yet.
-        "google/gemini-2.5-pro,openai/gpt-5-chat,google/gemini-3-flash-preview",
+        "WEIGHT_FALLBACK_MODELS", "openai/gpt-5-chat,google/gemini-2.5-flash",
     ).split(",") if m.strip()
 ]
 WEIGHT_CALL_RETRIES = int(os.environ.get("WEIGHT_CALL_RETRIES", "2"))
