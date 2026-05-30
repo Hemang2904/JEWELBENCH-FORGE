@@ -47,35 +47,37 @@ _DIM_COMMON = (
     "Preserve every design detail; the ring stays photorealistic in its actual "
     "metal colors and stones. Dimension lines, arrows, mm labels and a 10 mm "
     "scale bar are crisp dark-grey vector overlays on a pure white "
-    "RGB(255,255,255) background."
+    "RGB(255,255,255) background. CRITICAL: label ONLY the exact measurements "
+    "given below — do NOT invent, round, or add any other numbers or "
+    "dimensions. Every value on the drawing must match these exactly."
 )
 
 
-def _dim_view_prompts(metal: dict, kd: dict, center: dict | None,
-                      ring_size: str) -> dict:
-    """3 dimensioned views (top / side / front), each callout using the MEASURED
-    values where available (generic label otherwise)."""
-    bw, bt = kd.get("band_width"), kd.get("band_thickness")
-    hh, hd = kd.get("head_height"), kd.get("head_diameter")
-    cmm = center.get("length_mm") if center else None
+def _dim_view_prompts(meas: dict) -> dict:
+    """4 dimensioned views built from the authoritative BoM measurements, so the
+    callouts match the BoM exactly (no model-invented numbers)."""
+    bw, bt = meas.get("band_width"), meas.get("band_thickness")
+    hh, hd = meas.get("head_height"), meas.get("head_diameter")
+    rs = meas.get("ring_size")
+    center = meas.get("center") or {}
+    cmm = center.get("length_mm")
+    cshape = center.get("shape", "center")
 
     def v(x):
-        return f" ({x} mm)" if x else ""
+        return f"{x} mm" if x else "as shown"
 
     top = ("Re-render this EXACT ring from a perfectly overhead orthographic "
-           "top-down view and add mm dimension callouts for: head / center "
-           f"stone diameter{v(cmm)}, and overall top width. " + _DIM_COMMON)
-    side = ("Re-render this EXACT ring from a pure 90-degree side profile and "
-            f"add mm dimension callouts for: band width{v(bw)}, band "
-            f"thickness{v(bt)}, head height{v(hh)}, and total ring height. "
-            + _DIM_COMMON)
-    front = ("Re-render this EXACT ring from a head-on front elevation and add "
-             f"mm dimension callouts for: head width{v(hd)}, shoulder width, "
-             "and the inner band diameter for US ring size "
-             f"{ring_size or 'the specified size'}. " + _DIM_COMMON)
-    iso = ("Re-render this EXACT ring from a 45-degree three-quarter view and "
-           f"add mm dimension callouts for: head height{v(hh)}, band "
-           f"width{v(bw)}, and overall ring height. " + _DIM_COMMON)
+           f"top-down view. Label ONLY: {cshape} stone = {v(cmm)}; band width "
+           f"= {v(bw)}. " + _DIM_COMMON)
+    side = ("Re-render this EXACT ring from a pure 90-degree side profile. "
+            f"Label ONLY: band width = {v(bw)}; band thickness = {v(bt)}; head "
+            f"height = {v(hh)}. " + _DIM_COMMON)
+    front = ("Re-render this EXACT ring from a head-on front elevation. Label "
+             f"ONLY: head diameter = {v(hd)}; band width = {v(bw)}; US ring "
+             f"size = {rs}. " + _DIM_COMMON)
+    iso = ("Re-render this EXACT ring from a 45-degree three-quarter view. "
+           f"Label ONLY: head height = {v(hh)}; band width = {v(bw)}; head "
+           f"diameter = {v(hd)}. " + _DIM_COMMON)
     return {"Top — dimensioned": top, "Side — dimensioned": side,
             "Front — dimensioned": front, "Three-Quarter — dimensioned": iso}
 
@@ -107,10 +109,52 @@ def _dim_volume_check(est: dict, ring_size: str) -> str:
             f"{shank_vol_est:,.0f} mm³ ({diff:.0%} diff) — {flag}")
 
 
-def _spec_chart_md(sku: str, metal: dict, dia: dict, est: dict,
-                   ring_size: str, gold: dict) -> str:
-    """Standard jewelry spec chart (all values) as Markdown."""
+def _derive_band_dims(est: dict, ring_size: str):
+    """Band width/thickness — the model's values if present, otherwise solved
+    from the shank volume + ring circumference so they're CONSISTENT with the
+    weight (no invented numbers)."""
     kd = est.get("key_dimensions_mm") or {}
+    bw, bt = kd.get("band_width"), kd.get("band_thickness")
+    inner = _us_ring_circ_mm(ring_size)
+    shank_vol = est.get("shank_volume_mm3") or 0
+    if bw and bt:
+        return round(float(bw), 2), round(float(bt), 2)
+    if not (inner and shank_vol):
+        return (round(float(bw), 2) if bw else None,
+                round(float(bt), 2) if bt else None)
+    ratio = 1.3  # typical width:thickness if neither is known
+    bt_v = float(bt) if bt else 1.8
+    for _ in range(8):  # iterate: area depends on thickness via centerline
+        area = shank_vol / (inner + math.pi * bt_v)
+        bt_v = float(bt) if bt else (area / ratio) ** 0.5
+    area = shank_vol / (inner + math.pi * bt_v)
+    bw_v = float(bw) if bw else area / bt_v
+    return round(bw_v, 2), round(bt_v, 2)
+
+
+def _measurements(est: dict, metal: dict, dia: dict, ring_size: str) -> dict:
+    """Single authoritative measurement set the spec chart AND the tech report
+    both read, so every number is identical to the BoM."""
+    center = (max(dia["groups"], key=lambda g: g.get("carat_each", 0))
+              if dia["groups"] else None)
+    bw, bt = _derive_band_dims(est, ring_size)
+    kd = est.get("key_dimensions_mm") or {}
+    cmm = center.get("length_mm") if center else None
+    hd = kd.get("head_diameter") or (round(float(cmm) * 1.4, 1) if cmm else None)
+    hh = kd.get("head_height") or (round(float(cmm) * 1.1, 1) if cmm else None)
+    return {
+        "gold_weight_g": metal["gold_weight_g"],
+        "ring_size": ring_size or "—",
+        "band_width": bw, "band_thickness": bt,
+        "head_height": hh, "head_diameter": hd,
+        "center": center, "stones": dia["groups"],
+        "volume_mm3": est.get("volume_mm3"),
+    }
+
+
+def _spec_chart_md(sku: str, metal: dict, dia: dict, est: dict,
+                   ring_size: str, gold: dict, meas: dict) -> str:
+    """Standard jewelry spec chart (all values) as Markdown."""
     sv = metal["shank_value_usd"]
     lines = [
         f"### JewelBench Forge — Spec Sheet `{sku}`", "",
@@ -125,10 +169,10 @@ def _spec_chart_md(sku: str, metal: dict, dia: dict, est: dict,
         f"| Shank value range | ${sv[0]:,.2f} – ${sv[1]:,.2f} |",
         f"| Ring size (US) | {ring_size or '—'} |", "",
         "**Dimensions (mm, estimated)**", "", "| Field | mm |", "|---|---|",
-        f"| Band width | {kd.get('band_width', '—')} |",
-        f"| Band thickness | {kd.get('band_thickness', '—')} |",
-        f"| Head height | {kd.get('head_height', '—')} |",
-        f"| Head diameter | {kd.get('head_diameter', '—')} |", "",
+        f"| Band width | {meas.get('band_width', '—')} |",
+        f"| Band thickness | {meas.get('band_thickness', '—')} |",
+        f"| Head height | {meas.get('head_height', '—')} |",
+        f"| Head diameter | {meas.get('head_diameter', '—')} |", "",
         f"**Stones — {dia['total_count']} total, {dia['total_carat']:.3f} ct**",
         "",
         "| Location | Shape | Count | mm | ct each | ct src | $/stone | Subtotal |",
@@ -315,12 +359,12 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
     # ── Production spec sheet: image + standard chart + dimensioned views ─────
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("#### 📐 Production spec sheet")
-    kd = est.get("key_dimensions_mm") or {}
-    center = (max(dia["groups"], key=lambda g: g.get("carat_each", 0))
-              if dia["groups"] else None)
+    # One authoritative measurement set — the chart AND the tech report read
+    # these, so every number matches the BoM (no model-invented values).
+    meas = _measurements(est, metal, dia, ring_size)
     bad_ref = (not design_ref) or str(design_ref).startswith("demo://")
     disabled = is_demo() or bad_ref
-    spec_md = _spec_chart_md(sku, metal, dia, est, ring_size, gold)
+    spec_md = _spec_chart_md(sku, metal, dia, est, ring_size, gold, meas)
 
     col_img, col_chart = st.columns([1, 1], gap="medium")
     with col_img:
@@ -337,13 +381,25 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
                        use_container_width=True)
 
     st.markdown("##### 📑 Technical report — dimensioned views")
-    st.caption("Multiple views (top, side, front, three-quarter) with the "
-               "measured mm dimensions drawn **on each image** — a quick tech "
-               "report for the workshop.")
+    st.caption("Multiple views (top, side, front, three-quarter) labelled with "
+               "the **exact** measurements below — same values as the BoM.")
+    # Authoritative legend: these are the only numbers the drawings may show.
+    _c = meas.get("center") or {}
+    st.markdown(
+        f"""
+| Measurement | Value |
+|---|---|
+| Gold weight | {meas['gold_weight_g']:.2f} g |
+| Ring size (US) | {meas['ring_size']} |
+| Band width × thickness | {meas.get('band_width', '—')} × {meas.get('band_thickness', '—')} mm |
+| Head diameter × height | {meas.get('head_diameter', '—')} × {meas.get('head_height', '—')} mm |
+| Center stone | {_c.get('shape', '—')} {_c.get('length_mm', '—')} mm ({_c.get('carat_each', 0):.2f} ct) |
+"""
+    )
     if st.button("Generate technical report (dimensioned views)",
                  key="forge_dimviews", disabled=disabled,
                  use_container_width=True):
-        prompts = _dim_view_prompts(metal, kd, center, ring_size)
+        prompts = _dim_view_prompts(meas)
         import fal_client
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
