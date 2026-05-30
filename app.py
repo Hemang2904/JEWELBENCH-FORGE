@@ -45,7 +45,7 @@ _ENV_VALIDATION_THRESHOLD = int(os.environ.get("VALIDATION_THRESHOLD", "80"))
 _ENV_MAX_VALIDATION_TRIES = int(os.environ.get("MAX_VALIDATION_TRIES", "3"))
 
 st.set_page_config(
-    page_title="JewelBench — Component Composer",
+    page_title="JewelBench Forge",
     page_icon="https://jewelbench.ai/wp-content/uploads/2025/05/jewelbench_logo.svg",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -601,7 +601,7 @@ st.markdown(f"""
 <nav class="jb-nav">
   <div class="jb-nav-brand">
     <img src="https://jewelbench.ai/wp-content/uploads/2025/05/jewelbench_logo.svg" class="jb-nav-logo" alt="JewelBench"/>
-    <span class="jb-nav-product">Component Composer</span>
+    <span class="jb-nav-product">Forge</span>
   </div>
   <div class="jb-nav-right">
     {'<span class="jb-nav-pill ok">● Engine Ready</span>' if fal_ok else '<span class="jb-nav-pill err">● Engine Offline</span>'}
@@ -1472,7 +1472,7 @@ st.markdown("""
   <div class="jb-footer-inner">
     <img src="https://jewelbench.ai/wp-content/uploads/2025/05/jewelbench_logo.svg" class="jb-footer-logo" alt="JewelBench"/>
     <div class="jb-footer-links">
-      <span>Component Composer</span>
+      <span>Forge</span>
       <span class="jb-footer-dot">·</span>
       <span>Powered by JewelBench Engine</span>
       <span class="jb-footer-dot">·</span>
