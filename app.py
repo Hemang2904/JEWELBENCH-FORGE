@@ -48,7 +48,7 @@ st.set_page_config(
     page_title="JewelBench Forge",
     page_icon="https://jewelbench.ai/wp-content/uploads/2025/05/jewelbench_logo.svg",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown("""
@@ -89,11 +89,14 @@ html, body, [data-testid="stAppViewContainer"], .stApp {
 [data-testid="stAppViewContainer"] > section > div {
     padding-top: 0 !important;
 }
-#MainMenu, footer, header { visibility: hidden !important; }
+#MainMenu, footer { visibility: hidden !important; }
 .stDeployButton { display: none !important; }
 
-/* ── Sidebar (hidden) ── */
-[data-testid="stSidebar"] { display: none !important; }
+/* ── Sidebar (multipage nav: Mix & Match + Single Image Estimator) ── */
+[data-testid="stSidebar"] { display: block !important; }
+/* keep the collapse/expand control reachable even with the header hidden */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] { visibility: visible !important; }
 
 
 /* ── Section Titles ── */
