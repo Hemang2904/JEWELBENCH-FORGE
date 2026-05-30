@@ -1,6 +1,29 @@
 import streamlit as st
-import fal_client
 import os
+import hashlib
+import datetime
+import json as _json
+
+# Load a local .env (dev) and propagate ALL Streamlit secrets into the
+# environment BEFORE importing local modules. Several modules read their config
+# (FAL_KEY, WEIGHT_MODEL_*, DENSITY_*, METAL_MARKUP, ...) from os.environ at
+# import time, and Streamlit Cloud's secret manager is the source of truth, so
+# this must run first.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+try:
+    if hasattr(st, "secrets"):
+        for _k, _v in st.secrets.items():
+            if isinstance(_v, (str, int, float, bool)):
+                os.environ[str(_k)] = str(_v)
+except Exception:
+    pass
+
+import fal_client
 from prompts import (
     build_combine_prompt,
     build_target_summary,
@@ -17,32 +40,9 @@ from pricing import (
     load_diamond_rates,
 )
 import forge_bom
-import hashlib
-import datetime
-import json as _json
 
 _ENV_VALIDATION_THRESHOLD = int(os.environ.get("VALIDATION_THRESHOLD", "80"))
 _ENV_MAX_VALIDATION_TRIES = int(os.environ.get("MAX_VALIDATION_TRIES", "3"))
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-try:
-    if hasattr(st, "secrets") and "FAL_KEY" in st.secrets:
-        os.environ["FAL_KEY"] = st.secrets["FAL_KEY"]
-except Exception:
-    pass
-
-if not os.environ.get("FAL_KEY"):
-    try:
-        fal_key = st.secrets.get("FAL_KEY", "")
-        if fal_key:
-            os.environ["FAL_KEY"] = fal_key
-    except Exception:
-        pass
 
 st.set_page_config(
     page_title="JewelBench — Component Composer",
