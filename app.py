@@ -492,10 +492,10 @@ def upload_to_fal(uploaded_file):
 # and underside reveal band thickness + hollowing (the biggest weight unknowns),
 # and the head macro captures setting volume. Technical Drawing is NOT here — it
 # is generated later in the Bill of Materials once real mm/weight values exist.
-# View renderer: Flux Kontext is purpose-built for consistent object edits
-# (keeps the same ring across angles). Override VIEW_MODEL to go back to
-# fal-ai/nano-banana-pro/edit if preferred.
-VIEW_MODEL = os.environ.get("VIEW_MODEL", "fal-ai/flux-pro/kontext")
+# View renderer: Flux Kontext [max] — consistent object edits (same ring across
+# angles) at the highest Kontext fidelity. Override VIEW_MODEL to switch (e.g.
+# fal-ai/flux-pro/kontext or fal-ai/nano-banana-pro/edit).
+VIEW_MODEL = os.environ.get("VIEW_MODEL", "fal-ai/flux-pro/kontext/max")
 
 _VIEW_COMMON = (
     "CRITICAL — CONSISTENCY: this is the SAME single physical ring being "
