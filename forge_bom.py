@@ -269,9 +269,17 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         f"models: {', '.join(str(m) for m in est.get('models', []))}"
     )
 
-    # Dimension ↔ volume cross-check: a shank of the measured band dimensions,
-    # wrapped at the ring's circumference, should roughly match the model's
-    # shank volume. Big mismatch = dimensions and volume disagree.
+    # Scale calibration status — the math is anchored to the known ring size.
+    if est.get("scale_calibrated"):
+        st.caption(f"📐 Scale-calibrated to ring size US {ring_size} "
+                   f"(inner Ø {est.get('inner_diameter_mm')} mm, "
+                   f"×{est.get('scale_applied')}) — geometry anchored to the "
+                   "known size, shank volume solved from band dimensions.")
+    elif not str(ring_size or '').strip():
+        st.warning("⚠️ No ring size — the solver can't calibrate scale, so "
+                   "values may be off. Enter the ring size for accurate math.")
+
+    # Dimension ↔ volume cross-check.
     _xc = _dim_volume_check(est, ring_size)
     if _xc:
         st.caption(_xc)

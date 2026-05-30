@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import re
 import time
@@ -89,6 +90,90 @@ def volume_to_weight(volume_mm3: float, density_g_cm3: float,
                      casting: float = CASTING_FACTOR) -> float:
     """mm^3 -> grams.  1 cm^3 = 1000 mm^3."""
     return round(max(0.0, volume_mm3) / 1000.0 * density_g_cm3 * casting, 3)
+
+
+# Scale clamp: a wildly wrong model inner-diameter shouldn't blow up the solve.
+_SCALE_MIN, _SCALE_MAX = float(os.environ.get("WEIGHT_SCALE_MIN", "0.4")), \
+    float(os.environ.get("WEIGHT_SCALE_MAX", "2.5"))
+
+
+def us_ring_inner_diameter_mm(ring_size: str | float | None) -> float:
+    """US ring size -> KNOWN inside (finger-hole) diameter in mm. 0 if blank.
+    This is the one exact measurement we anchor the whole solve to."""
+    try:
+        s = float(str(ring_size).strip())
+    except (ValueError, TypeError):
+        return 0.0
+    return (36.537 + 2.5535 * s) / math.pi  # circumference / pi
+
+
+def _apply_scale(est: dict, sc: float) -> None:
+    """Rescale one estimate in place: volumes by sc^3, lengths by sc."""
+    for k in ("total_metal_volume_mm3", "shank_volume_mm3",
+              "head_volume_mm3", "stone_seat_volume_mm3"):
+        if est.get(k):
+            est[k] = float(est[k]) * sc ** 3
+    kd = est.get("key_dimensions_mm") or {}
+    for k, val in list(kd.items()):
+        if isinstance(val, (int, float)):
+            kd[k] = round(val * sc, 2)
+    for stone in est.get("stones") or []:
+        for k in ("length_mm", "width_mm"):
+            if stone.get(k):
+                stone[k] = round(float(stone[k]) * sc, 2)
+
+
+_BAND_W_RANGE = (1.0, 12.0)   # mm, physical sanity clamps
+_BAND_T_RANGE = (0.8, 6.0)
+_SHANK_FILL = float(os.environ.get("SHANK_FILL_FACTOR", "0.85"))  # D-/comfort-fit
+
+
+def parametric_shank_volume(inner_d_mm: float, band_w: float, band_t: float,
+                            fill: float = _SHANK_FILL) -> float:
+    """Robust closed-form band volume: cross-section area x centerline
+    circumference x a fill factor (cross-sections aren't perfect rectangles)."""
+    centerline = math.pi * (inner_d_mm + band_t)
+    return band_w * band_t * centerline * fill
+
+
+def refine_shank_volume(est: dict) -> None:
+    """Replace the model's shank-volume GUESS with the closed-form value from
+    the calibrated band dimensions + known inner diameter, and fix the total to
+    match. No-op if band dims or inner diameter are missing."""
+    kd = est.get("key_dimensions_mm") or {}
+    bw, bt = kd.get("band_width"), kd.get("band_thickness")
+    inner = est.get("inner_diameter_mm")
+    if not (bw and bt and inner):
+        return
+    bw = min(max(float(bw), _BAND_W_RANGE[0]), _BAND_W_RANGE[1])
+    bt = min(max(float(bt), _BAND_T_RANGE[0]), _BAND_T_RANGE[1])
+    kd["band_width"], kd["band_thickness"] = round(bw, 2), round(bt, 2)
+    new_shank = parametric_shank_volume(float(inner), bw, bt)
+    old_shank = float(est.get("shank_volume_mm3") or 0)
+    total = float(est.get("total_metal_volume_mm3") or 0)
+    est["shank_volume_mm3"] = round(new_shank, 1)
+    est["total_metal_volume_mm3"] = round(max(0.0, total - old_shank + new_shank), 1)
+
+
+def calibrate_to_ring_size(estimate: dict, ring_size) -> dict:
+    """Anchor a model estimate to the KNOWN ring-size diameter.
+
+    scale = known_inner_diameter / model_inner_diameter, clamped to a sane
+    band. All geometry is rescaled so the band hole matches the real ring —
+    this is what stops absurd carats/weights from a bad absolute-mm guess.
+    Mutates and returns the estimate; no-op without ring size or a model
+    inner-diameter reading.
+    """
+    known = us_ring_inner_diameter_mm(ring_size)
+    model_id = float(estimate.get("inner_diameter_mm") or 0)
+    if known <= 0 or model_id <= 0:
+        estimate["_scale_applied"] = 1.0
+        return estimate
+    sc = max(_SCALE_MIN, min(_SCALE_MAX, known / model_id))
+    _apply_scale(estimate, sc)
+    estimate["_scale_applied"] = round(sc, 3)
+    estimate["inner_diameter_mm"] = round(known, 2)
+    return estimate
 
 
 def _mean(xs: list[float]) -> float:
@@ -222,6 +307,9 @@ def _prompt(alloy: str, ring_size: str | None) -> str:
         f"millimetres. {scale_hint}\n"
         "Return ONLY a JSON object, no prose:\n"
         "{\n"
+        '  "inner_diameter_mm": <number, the INSIDE finger-hole diameter of '
+        'the band — measure it carefully; everything is scale-calibrated to '
+        'this>,\n'
         '  "total_metal_volume_mm3": <number, solid metal body>,\n'
         '  "shank_volume_mm3": <number, band/shank portion>,\n'
         '  "head_volume_mm3": <number, head/setting portion>,\n'
@@ -348,8 +436,21 @@ def estimate_weight(image_urls: list[str], alloy: str,
         return {"_error": "all weight models failed", "errors": errors,
                 "_per_model": errors, "alloy": alloy}
 
+    # MATH SOLVER: anchor each estimate's geometry to the known ring-size
+    # diameter before reconciling, so imperfect absolute-mm guesses are
+    # calibrated to the real size (volume ∝ scale^3, lengths ∝ scale).
+    scales = []
+    for e in good:
+        calibrate_to_ring_size(e, ring_size)   # anchor geometry to ring size
+        refine_shank_volume(e)                 # shank from closed-form formula
+        if e.get("_scale_applied"):
+            scales.append(e["_scale_applied"])
+
     out = {**reconcile(good, alloy), "montage_url": montage_url,
-           "errors": errors}
+           "errors": errors,
+           "scale_calibrated": bool(scales and any(s != 1.0 for s in scales)),
+           "scale_applied": round(sum(scales) / len(scales), 3) if scales else 1.0,
+           "inner_diameter_mm": round(us_ring_inner_diameter_mm(ring_size), 2)}
     # Stones + key dimensions: take the first model that reported each.
     for e in good:
         if e.get("stones") and "stones" not in out:
