@@ -871,7 +871,9 @@ else:
 # ── PHASE A: ENRICH ──────────────────────────────────────────────────────────
 
 if generate_clicked and _ready:
-    active_specs = [s for s in image_specs if s["file"] and s["description"]]
+    # Every uploaded image is enriched (blank descriptions are AI-generated),
+    # so the review covers all references — not just the ones you typed.
+    active_specs = [s for s in image_specs if s["file"]]
 
     with st.status("Analyzing references — phases 1 & 2 of 5...", expanded=True) as prep_status:
         st.write("🧹 Phase 1/5 — Cleaning reference backgrounds...")
@@ -930,7 +932,9 @@ if _enrich_pending:
                 if spec["file"]:
                     st.image(spec["file"], use_container_width=True)
                 changed = spec["description"] != spec["_original"]
-                if changed:
+                if not (spec["_original"] or "").strip():
+                    st.caption("✨ AI-generated from the image")
+                elif changed:
                     st.caption(f"Original: *{spec['_original']}*  →  AI enriched")
                 else:
                     st.caption("Unchanged from your description")

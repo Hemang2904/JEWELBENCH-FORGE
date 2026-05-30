@@ -18,6 +18,12 @@ from PIL import Image
 
 
 ENRICHMENT_MODEL = os.environ.get("ENRICHMENT_MODEL", "google/gemini-2.5-pro")
+# Second model tried if the primary returns nothing — so enrichment works for
+# EVERY image, not just whichever the primary happened to answer.
+ENRICHMENT_FALLBACK_MODEL = os.environ.get(
+    "ENRICHMENT_FALLBACK_MODEL", "anthropic/claude-sonnet-4.5"
+)
+ENRICHMENT_ENDPOINT = os.environ.get("ENRICHMENT_ENDPOINT", "fal-ai/any-llm/vision")
 VALIDATOR_MODEL = os.environ.get("VALIDATOR_MODEL", "anthropic/claude-sonnet-4.5")
 VALIDATOR_FALLBACK_MODEL = os.environ.get(
     "VALIDATOR_FALLBACK_MODEL", "openai/gpt-5-chat"
@@ -110,55 +116,85 @@ def strip_url_to_white(image_url: str) -> str:
     return fal_client.upload(buf.getvalue(), content_type="image/png")
 
 
-def enrich_description(image_url: str, user_desc: str) -> str:
-    """Use a vision LLM to expand a terse description into a rich one that
-    captures shape, decoration, metal color, prong count, and stones.
+_DESC_PREAMBLE = re.compile(
+    r"^(the component is|this is|here is|it is|a |an |the )\s*",
+    re.IGNORECASE,
+)
 
-    Falls back to user_desc if the LLM call fails or returns nothing useful.
-    The user can still pre-empt enrichment by writing a long description
-    (>= 60 chars).
-    """
-    if len(user_desc.strip()) >= 60:
-        return user_desc
 
-    prompt = (
-        "You are a jewelry CAD expert. The user wants to extract this "
-        f"specific component from the jewelry piece in this image: \"{user_desc}\". "
-        "Write ONE detailed phrase (max 30 words) precisely describing "
-        "ONLY the component itself, NOT the whole piece. Include where "
-        "applicable: exact silhouette/shape (e.g. 'flower halo with rose "
-        "petals', '6-prong solitaire head', '3-stone head with round "
-        "accents', 'wide lattice openwork shank'), metal color (rose-gold "
-        "/ yellow-gold / white-gold / platinum / two-tone), prong count, "
-        "decoration (scrollwork, undergallery, milgrain, halo, openwork), "
-        "and stones (pavé full-length / shoulder-only / no stones / "
-        "center stone shape).\n\n"
-        "STRICT RULES:\n"
-        "- Do NOT use the words 'ring', 'piece', 'the piece', or 'this "
-        "ring'. Describe ONLY the component (head / shank / halo / etc.).\n"
-        "- Do NOT describe other parts of the jewelry that are not the "
-        "requested component.\n"
-        "- Do NOT add any preamble, no quotes, no 'The component is…', "
-        "no 'This is a…'. Start directly with the component description.\n"
-        "- Output a single noun phrase, e.g. 'rose-gold flower-halo head "
-        "with five rose-petal cup around a 4-prong round-diamond center'."
+def _clean_desc(text: str) -> str:
+    """Strip quotes/preamble/trailing punctuation from a model description."""
+    if not text:
+        return ""
+    out = text.strip().strip('"').strip("'").strip()
+    out = out.splitlines()[0].strip() if out else out  # first line only
+    out = _DESC_PREAMBLE.sub("", out).strip()
+    return out.rstrip(".").strip()
+
+
+def _enrich_prompt(user_desc: str) -> str:
+    if user_desc:
+        focus = (
+            f'The user wants to extract this specific component: "{user_desc}". '
+            "Describe ONLY that component."
+        )
+    else:
+        focus = (
+            "Identify the single most prominent component of this jewelry "
+            "piece (the head/setting if present, otherwise the dominant "
+            "feature) and describe ONLY that component."
+        )
+    return (
+        "You are a master jeweler writing a precise CAD brief. " + focus + "\n"
+        "Write ONE rich phrase (20-40 words) capturing, where visible: the "
+        "exact silhouette/shape; metal color (rose / yellow / white gold, "
+        "platinum, two-tone); prong/claw count and type; gallery / "
+        "under-bezel and decoration (milgrain, scrollwork, openwork, "
+        "filigree, pavé, channel, bezel); halo style; and EVERY stone group "
+        "(center shape & relative size, halo, side/accent stones). Be "
+        "specific and unambiguous.\n"
+        "RULES: describe ONLY the component, never the whole 'ring' or "
+        "'piece'; no preamble, no quotes, no 'this is'; start directly with "
+        "the noun phrase, e.g. 'rose-gold cathedral 6-prong solitaire head "
+        "with a round center, fine milgrain gallery, and bead-set pavé "
+        "shoulders'."
     )
 
+
+def _vision_text(model: str, prompt: str, image_url: str) -> str:
+    """One vision call against the enrichment endpoint; '' on any failure."""
     try:
         result = fal_client.subscribe(
-            "fal-ai/any-llm/vision",
-            arguments={
-                "model": ENRICHMENT_MODEL,
-                "prompt": prompt,
-                "image_url": image_url,
-            },
+            ENRICHMENT_ENDPOINT,
+            arguments={"model": model, "prompt": prompt, "image_url": image_url},
         )
     except Exception:
+        return ""
+    return _clean_desc(result.get("output") or "")
+
+
+def enrich_description(image_url: str, user_desc: str) -> str:
+    """Vision-LLM describe/enrich ONE reference component.
+
+    Works for every image (not just the first that answers): it tries the
+    primary model, then a fallback model if the primary returns nothing.
+    Handles a blank user description by having the model describe the most
+    prominent component itself. Power users can pre-empt it by typing a long
+    (>= 80 char) description.
+    """
+    user_desc = (user_desc or "").strip()
+    if len(user_desc) >= 80:
         return user_desc
 
-    enriched = (result.get("output") or "").strip().strip('"').strip("'")
-    if enriched and len(enriched) > len(user_desc) + 10:
-        return enriched
+    prompt = _enrich_prompt(user_desc)
+    for model in (ENRICHMENT_MODEL, ENRICHMENT_FALLBACK_MODEL):
+        if not model:
+            continue
+        out = _vision_text(model, prompt, image_url)
+        # Accept any solid description (don't require it to beat the user's
+        # length — good descriptions can be concise).
+        if out and len(out) >= 8:
+            return out
     return user_desc
 
 
