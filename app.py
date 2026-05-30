@@ -32,7 +32,6 @@ from prompts import (
 from preprocessing import (
     strip_background_to_white,
     strip_url_to_white,
-    enrich_description,
     validate_design,
 )
 from pricing import (
@@ -838,28 +837,23 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-_enrich_pending = st.session_state.get("enrichment_pending")
-
-if not _enrich_pending:
-    _gen_cols = st.columns([1, 4, 1])
-    with _gen_cols[1]:
-        generate_clicked = st.button(
-            "✨ GENERATE COMBINED DESIGN",
-            use_container_width=True,
-            type="primary",
-            disabled=not _ready,
-        )
-else:
-    generate_clicked = False
+_gen_cols = st.columns([1, 4, 1])
+with _gen_cols[1]:
+    generate_clicked = st.button(
+        "✨ GENERATE COMBINED DESIGN",
+        use_container_width=True,
+        type="primary",
+        disabled=not _ready,
+    )
 
 
-# ── PHASE A: ENRICH ──────────────────────────────────────────────────────────
+# ── GENERATION ───────────────────────────────────────────────────────
 
 if generate_clicked and _ready:
     active_specs = [s for s in image_specs if s["file"] and s["description"]]
 
-    with st.status("Analyzing references — phases 1 & 2 of 5...", expanded=True) as prep_status:
-        st.write("🧹 Phase 1/5 — Cleaning reference backgrounds...")
+    with st.status("Preparing references...", expanded=True) as prep_status:
+        st.write("🧹 Cleaning reference backgrounds...")
         try:
             image_urls = [upload_to_fal(s["file"]) for s in active_specs]
         except Exception as e:
@@ -867,94 +861,13 @@ if generate_clicked and _ready:
             st.error(f"Reference upload failed: {e}")
             st.stop()
         st.write(f"✓ {len(image_urls)} image(s) cleaned and uploaded")
+        prep_status.update(label="✓ References ready", state="complete")
 
-        st.write("🔍 Phase 2/5 — Reading reference images to enrich descriptions...")
-        enriched_specs = []
-        for spec, url in zip(active_specs, image_urls):
-            enriched = enrich_description(url, spec["description"])
-            enriched_specs.append({
-                "file": spec["file"],
-                "description": enriched,
-                "_original": spec["description"],
-            })
-        st.write(f"✓ {len(enriched_specs)} description(s) enriched — review below before rendering")
-        prep_status.update(
-            label="✓ Analysis complete — review descriptions below",
-            state="complete",
-        )
-
-    st.session_state["enrichment_pending"] = {
-        "image_urls": image_urls,
-        "enriched_specs": enriched_specs,
-    }
-    st.rerun()
-
-
-# ── ENRICHMENT REVIEW ─────────────────────────────────────────────────────────
-
-confirm_clicked = False
-confirmed_image_urls = None
-confirmed_enriched_specs = None
-
-if _enrich_pending:
-    st.markdown('<div class="section-divider"></div>', unsafe_allow_html=True)
-    st.markdown("""
-<div class="section-title"><span class="sec-num">03b</span> Review Descriptions</div>
-<div class="section-subtitle">Edit any component description before rendering — precision here is the single biggest lever for output quality.</div>
-""", unsafe_allow_html=True)
-
-    _ep_specs = _enrich_pending["enriched_specs"]
-    _review_cols = st.columns(len(_ep_specs), gap="medium")
-    for i, spec in enumerate(_ep_specs):
-        with _review_cols[i]:
-            with st.container(border=True):
-                st.markdown(
-                    f'<div class="card-badge"><span>{badge_icons[i]}</span> Reference {i+1}</div>',
-                    unsafe_allow_html=True,
-                )
-                if spec["file"]:
-                    st.image(spec["file"], use_container_width=True)
-                changed = spec["description"] != spec["_original"]
-                if not (spec["_original"] or "").strip():
-                    st.caption("✨ AI-generated from the image")
-                elif changed:
-                    st.caption(f"Original: *{spec['_original']}*  →  AI enriched")
-                else:
-                    st.caption("Unchanged from your description")
-                st.text_area(
-                    f"Description {i+1}",
-                    value=spec["description"],
-                    key=f"enriched_edit_{i}",
-                    height=90,
-                    label_visibility="collapsed",
-                )
-
-    _confirm_cols = st.columns([1, 3, 1])
-    with _confirm_cols[0]:
-        if st.button("← Re-upload", use_container_width=True):
-            del st.session_state["enrichment_pending"]
-            st.rerun()
-    with _confirm_cols[1]:
-        confirm_clicked = st.button(
-            "✅ CONFIRM & RENDER",
-            use_container_width=True,
-            type="primary",
-        )
-
-    if confirm_clicked:
-        confirmed_image_urls = _enrich_pending["image_urls"]
-        confirmed_enriched_specs = [
-            {**spec, "description": st.session_state.get(f"enriched_edit_{i}", spec["description"])}
-            for i, spec in enumerate(_ep_specs)
-        ]
-        del st.session_state["enrichment_pending"]
-
-
-# ── GENERATION ───────────────────────────────────────────────────────────────
-
-if confirmed_image_urls and confirmed_enriched_specs:
-    image_urls = confirmed_image_urls
-    enriched_specs = confirmed_enriched_specs
+    # Descriptions are used exactly as typed — no AI enrichment.
+    enriched_specs = [
+        {"file": s["file"], "description": s["description"]}
+        for s in active_specs
+    ]
 
     with st.status("Running AI pipeline...", expanded=True) as gen_status:
 
