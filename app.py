@@ -541,15 +541,18 @@ VIEW_PROMPTS = {
             + _VIEW_COMMON
         ),
     },
-    "Band Cross-Section": {
+    "Band Edge & Thickness": {
         "model": "fal-ai/nano-banana-pro/edit",
-        "icon": "✂️",
+        "icon": "📏",
         "prompt": (
-            "Re-render this EXACT same ring as a cutaway at the bottom of the "
-            "shank, revealing the BAND'S CROSS-SECTIONAL PROFILE and wall "
-            "thickness (is it solid or hollowed?), with the cut face shown "
-            "flat-on and the rest of the ring in light ghosted outline. This "
-            "reveals how much metal is in the band. " + _VIEW_COMMON
+            "Re-render this EXACT same ring zoomed in on the BOTTOM of the "
+            "shank, viewed slightly from the edge so the band's WIDTH, WALL "
+            "THICKNESS and cross-sectional profile (flat / D-shape / domed / "
+            "comfort-fit) are clearly readable. Keep the ENTIRE ring fully "
+            "SOLID, opaque and photorealistic in its real metal color — "
+            "absolutely NO transparency, NO ghosting, NO x-ray, NO faded, "
+            "washed-out or translucent effect. ONLY the camera framing "
+            "changes. " + _VIEW_COMMON
         ),
     },
     "Head & Setting Macro": {
