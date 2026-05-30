@@ -12,8 +12,8 @@ Flow
    and reconciles the two model estimates: mean = point value, spread = range.
 
 We report only the two numbers the spec asks for:
-    * metal_weight_g  — the cast metal body (volume * density * casting)
-    * net_weight_g    — metal after stone seats are removed (used for pricing)
+    * gold_weight_g   — the cast metal (volume * density * casting); this is the
+                        single weight you pay gold for and pricing runs off it
 
 The shank (band) is reported as a min..max RANGE, taken from the disagreement
 between the two models plus a small uncertainty pad.
@@ -113,21 +113,20 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
 
     total_v = col("total_metal_volume_mm3")
     shank_v = col("shank_volume_mm3")
-    seat_v = col("stone_seat_volume_mm3")
 
     total_mean = _mean(total_v)
-    seat_mean = _mean(seat_v)
+    shank_mean = _mean(shank_v)
 
-    metal_weight = volume_to_weight(total_mean, density)
-    net_weight = volume_to_weight(max(0.0, total_mean - seat_mean), density)
+    # Single GOLD weight = the cast metal (volume x density x casting).
+    gold_weight = volume_to_weight(total_mean, density)
 
     # Shank value as a min..max RANGE from model spread.
     shank_w = [volume_to_weight(v, density) for v in shank_v]
     shank_lo, shank_hi = _range(shank_w)
 
-    # Total-weight band, for surfacing confidence.
-    metal_w_all = [volume_to_weight(v, density) for v in total_v]
-    metal_lo, metal_hi = _range(metal_w_all)
+    # Gold-weight band, for surfacing confidence.
+    gold_w_all = [volume_to_weight(v, density) for v in total_v]
+    gold_lo, gold_hi = _range(gold_w_all)
 
     n_models = len(total_v)
     single_model = n_models < 2
@@ -149,9 +148,10 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
         "alloy": alloy,
         "density_g_cm3": density,
         "casting_factor": CASTING_FACTOR,
-        "metal_weight_g": metal_weight,
-        "net_weight_g": net_weight,
-        "metal_weight_range_g": [metal_lo, metal_hi],
+        "gold_weight_g": gold_weight,
+        "gold_weight_range_g": [gold_lo, gold_hi],
+        "volume_mm3": round(total_mean, 1),
+        "shank_volume_mm3": round(shank_mean, 1),
         "shank_weight_range_g": [shank_lo, shank_hi],
         "models": [e.get("_model") for e in estimates if e],
         "single_model": single_model,
@@ -162,12 +162,9 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
 
 
 def scale_to_target(estimate: dict, target_weight_g: float) -> dict:
-    """Scale a reconciled estimate so net weight hits a user target.
-
-    Linear scale on volume -> weight; returns a copy with scaled weights and
-    the scale factor so the UI can show derived dimensions accordingly.
-    """
-    base = estimate.get("net_weight_g") or 0.0
+    """Scale so GOLD weight hits the user's target. Linear on volume->weight;
+    scales volume and the shank range too so dimensions stay consistent."""
+    base = estimate.get("gold_weight_g") or 0.0
     if base <= 0 or target_weight_g <= 0:
         return {**estimate, "target_scale": 1.0}
     k = target_weight_g / base
@@ -175,8 +172,9 @@ def scale_to_target(estimate: dict, target_weight_g: float) -> dict:
     return {
         **estimate,
         "target_scale": round(k, 4),
-        "net_weight_g": round(base * k, 3),
-        "metal_weight_g": round(estimate.get("metal_weight_g", 0) * k, 3),
+        "gold_weight_g": round(base * k, 3),
+        "volume_mm3": round((estimate.get("volume_mm3") or 0) * k, 1),
+        "shank_volume_mm3": round((estimate.get("shank_volume_mm3") or 0) * k, 1),
         "shank_weight_range_g": [round(lo * k, 3), round(hi * k, 3)],
     }
 

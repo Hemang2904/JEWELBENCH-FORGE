@@ -298,15 +298,14 @@ def price_bom(
     diamond_rates: dict,
     markup: float | None = None,
 ) -> dict:
-    """JEWELBENCH-FORGE pricing: metal value from NET weight + stones from carat.
+    """JEWELBENCH-FORGE pricing: metal value from GOLD weight + stones from carat.
 
-    Implements:  (net_metal_weight * spot_per_g * markup) + gemstone_value.
+    Implements:  (gold_weight * spot_per_g * markup) + gemstone_value.
     No flat manufacturing line items (that's compute_costs' job) — FORGE prices
-    purely off the two weights the spec asks for, plus carat-based stones.
+    purely off the single gold weight plus carat-based stones.
 
     weight_result   output of weight_estimator.reconcile/estimate_weight
-                    (carries alloy, net_weight_g, metal_weight_g,
-                     shank_weight_range_g)
+                    (carries alloy, gold_weight_g, shank_weight_range_g)
     diamond_groups  groups with carat_each already resolved via the fixed chart
                     (sizing.price_dimensions_to_groups)
     """
@@ -316,11 +315,9 @@ def price_bom(
     rate_usd = gold_rates["per_g"].get(f"{rate_key}_usd", 0.0)
     usd_inr = gold_rates["usd_inr"]
 
-    net_w = float(weight_result.get("net_weight_g") or 0.0)
-    metal_w = float(weight_result.get("metal_weight_g") or 0.0)
-
-    # Metal value is priced on NET weight (metal only); markup applied here.
-    metal_value_usd = round(net_w * rate_usd * markup, 2)
+    # Single GOLD weight (the cast metal you pay for); markup applied here.
+    gold_w = float(weight_result.get("gold_weight_g") or 0.0)
+    metal_value_usd = round(gold_w * rate_usd * markup, 2)
 
     # Shank value as a min..max RANGE (band weight range * rate * markup).
     shank_lo_g, shank_hi_g = (weight_result.get("shank_weight_range_g")
@@ -344,8 +341,7 @@ def price_bom(
     return {
         "metal": {
             "alloy": alloy,
-            "net_weight_g": net_w,
-            "metal_weight_g": metal_w,
+            "gold_weight_g": gold_w,
             "rate_usd_per_g": rate_usd,
             "markup": markup,
             "value_usd": metal_value_usd,

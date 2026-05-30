@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import os
 
 import streamlit as st
@@ -72,8 +73,38 @@ def _dim_view_prompts(metal: dict, kd: dict, center: dict | None,
              f"mm dimension callouts for: head width{v(hd)}, shoulder width, "
              "and the inner band diameter for US ring size "
              f"{ring_size or 'the specified size'}. " + _DIM_COMMON)
+    iso = ("Re-render this EXACT ring from a 45-degree three-quarter view and "
+           f"add mm dimension callouts for: head height{v(hh)}, band "
+           f"width{v(bw)}, and overall ring height. " + _DIM_COMMON)
     return {"Top — dimensioned": top, "Side — dimensioned": side,
-            "Front — dimensioned": front}
+            "Front — dimensioned": front, "Three-Quarter — dimensioned": iso}
+
+
+def _us_ring_circ_mm(ring_size: str) -> float:
+    """US ring size -> inner circumference (mm). 0 if unparseable."""
+    try:
+        s = float(str(ring_size).strip())
+    except (ValueError, TypeError):
+        return 0.0
+    return 36.537 + 2.5535 * s
+
+
+def _dim_volume_check(est: dict, ring_size: str) -> str:
+    """Cross-check: a solid band of the measured dimensions, wrapped at the
+    ring circumference, vs the model's shank volume. '' if data missing."""
+    kd = est.get("key_dimensions_mm") or {}
+    bw, bt = kd.get("band_width"), kd.get("band_thickness")
+    inner_circ = _us_ring_circ_mm(ring_size)
+    shank_vol_est = est.get("shank_volume_mm3") or 0
+    if not (bw and bt and inner_circ and shank_vol_est):
+        return ""
+    centerline = inner_circ + math.pi * float(bt)
+    shank_vol_dim = float(bw) * float(bt) * centerline
+    diff = abs(shank_vol_dim - shank_vol_est) / shank_vol_est
+    flag = "✅ consistent" if diff <= 0.30 else "⚠️ mismatch — recheck band/size"
+    return (f"Dimensional cross-check (shank): {bw}×{bt} mm band at US "
+            f"{ring_size} → ~{shank_vol_dim:,.0f} mm³ vs model "
+            f"{shank_vol_est:,.0f} mm³ ({diff:.0%} diff) — {flag}")
 
 
 def _spec_chart_md(sku: str, metal: dict, dia: dict, est: dict,
@@ -85,8 +116,7 @@ def _spec_chart_md(sku: str, metal: dict, dia: dict, est: dict,
         f"### JewelBench Forge — Spec Sheet `{sku}`", "",
         "**Metal**", "", "| Field | Value |", "|---|---|",
         f"| Alloy | {_pretty(metal['alloy'])} |",
-        f"| Net weight | {metal['net_weight_g']:.2f} g |",
-        f"| Metal weight | {metal['metal_weight_g']:.2f} g |",
+        f"| Gold weight | {metal['gold_weight_g']:.2f} g |",
         f"| Density | {est.get('density_g_cm3')} g/cm³ |",
         f"| Casting factor | {est.get('casting_factor')} |",
         f"| Rate | ${metal['rate_usd_per_g']:,.2f} /g |",
@@ -180,11 +210,11 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
     if target_w and target_w > 0:
         est = we.scale_to_target(est, float(target_w))
 
-    # ── Weight summary ────────────────────────────────────────────────────────
+    # ── Weight summary (single GOLD weight) ──────────────────────────────────
     shank_lo, shank_hi = est.get("shank_weight_range_g", [0, 0])
     m1, m2, m3 = st.columns(3, gap="medium")
-    m1.metric("Net weight", f"{est['net_weight_g']:.2f} g")
-    m2.metric("Metal weight", f"{est['metal_weight_g']:.2f} g")
+    m1.metric("Gold weight", f"{est.get('gold_weight_g', 0):.2f} g")
+    m2.metric("Volume", f"{est.get('volume_mm3', 0):,.0f} mm³")
     m3.metric("Confidence", est.get("confidence", "—").title(),
               f"Δ models {est.get('model_disagreement', 0):.0%}")
 
@@ -194,6 +224,13 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         f"casting factor {est.get('casting_factor')} · "
         f"models: {', '.join(str(m) for m in est.get('models', []))}"
     )
+
+    # Dimension ↔ volume cross-check: a shank of the measured band dimensions,
+    # wrapped at the ring's circumference, should roughly match the model's
+    # shank volume. Big mismatch = dimensions and volume disagree.
+    _xc = _dim_volume_check(est, ring_size)
+    if _xc:
+        st.caption(_xc)
     if est.get("single_model"):
         st.warning("⚠️ Only one model returned — the ensemble cross-check "
                    "didn't run, so treat this as a single-model estimate "
@@ -228,8 +265,7 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
             f"""
 | Item | Value |
 |---|---|
-| Net weight | {metal['net_weight_g']:.2f} g |
-| Metal weight | {metal['metal_weight_g']:.2f} g |
+| Gold weight | {metal['gold_weight_g']:.2f} g |
 | Rate | ${metal['rate_usd_per_g']:,.2f} /g |
 | Markup | ×{metal['markup']:.2f} |
 | **Metal value** | **${metal['value_usd']:,.2f} / ₹{metal['value_inr']:,.2f}** |
@@ -300,10 +336,13 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
                        file_name=f"{sku}_spec.md", mime="text/markdown",
                        use_container_width=True)
 
-    st.markdown("**Dimensioned views** — top, side & front, each labelled with "
-                "the measured mm values.")
-    if st.button("Generate dimensioned views", key="forge_dimviews",
-                 disabled=disabled, use_container_width=True):
+    st.markdown("##### 📑 Technical report — dimensioned views")
+    st.caption("Multiple views (top, side, front, three-quarter) with the "
+               "measured mm dimensions drawn **on each image** — a quick tech "
+               "report for the workshop.")
+    if st.button("Generate technical report (dimensioned views)",
+                 key="forge_dimviews", disabled=disabled,
+                 use_container_width=True):
         prompts = _dim_view_prompts(metal, kd, center, ring_size)
         import fal_client
         from concurrent.futures import ThreadPoolExecutor, as_completed
