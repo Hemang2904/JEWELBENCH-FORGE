@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import os
 
 import streamlit as st
 
@@ -37,10 +38,33 @@ def _pretty(alloy: str) -> str:
     return alloy.replace("_", " ").title()
 
 
+def _demo_estimate(alloy: str) -> dict:
+    """Offline sample estimate (no fal calls) so the BoM UI can be previewed
+    without FAL_KEY. Enabled via FORGE_DEMO=1."""
+    mock = [
+        {"_model": "google/gemini-2.5-pro (demo)", "total_metal_volume_mm3": 330,
+         "shank_volume_mm3": 185, "head_volume_mm3": 115,
+         "stone_seat_volume_mm3": 32},
+        {"_model": "anthropic/claude-sonnet-4.5 (demo)",
+         "total_metal_volume_mm3": 365, "shank_volume_mm3": 205,
+         "head_volume_mm3": 122, "stone_seat_volume_mm3": 41},
+    ]
+    out = we.reconcile(mock, alloy)
+    out["stones"] = [
+        {"location": "center", "shape": "round", "count": 1, "length_mm": 6.5},
+        {"location": "halo", "shape": "round", "count": 12, "length_mm": 1.3},
+        {"location": "shank", "shape": "round", "count": 20, "length_mm": 1.0},
+    ]
+    return out
+
+
 def render() -> None:
     """Draw the FORGE Bill of Materials section. No-op until a design exists."""
+    demo = bool(os.environ.get("FORGE_DEMO"))
     results = st.session_state.get("last_results")
     image_urls = st.session_state.get("last_image_urls") or []
+    if not results and demo:
+        results = ["demo://sample-design"]  # placeholder so the section renders
     if not results:
         return
 
@@ -72,12 +96,16 @@ def render() -> None:
 
     # Cache the (expensive) ensemble estimate per design+alloy+ring-size.
     cache_key = f"{results[0]}|{alloy}|{ring_size}"
+    if demo:
+        st.caption("🎬 **Demo mode** — sample weights/stones, no engine calls. "
+                   "Set a real FAL_KEY and unset FORGE_DEMO for live estimates.")
     if run:
         with st.status("Estimating metal weight from references "
                        "(ensemble)...", expanded=True) as s:
             st.write(f"Models: {we.WEIGHT_MODEL_PRIMARY} + "
                      f"{we.WEIGHT_MODEL_SECONDARY}")
-            est = we.estimate_weight(image_urls, alloy, ring_size or None)
+            est = _demo_estimate(alloy) if demo else \
+                we.estimate_weight(image_urls, alloy, ring_size or None)
             st.session_state["forge_estimate"] = {"key": cache_key, "est": est}
             s.update(label="Weight estimate complete", state="complete"
                      if not est.get("_error") else "error")
