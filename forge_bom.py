@@ -214,10 +214,20 @@ def _demo_estimate(alloy: str) -> dict:
     return out
 
 
+def _valid_ring_size(rs: str) -> bool:
+    """A parseable US ring size in a sane range — required to calibrate scale."""
+    try:
+        v = float(str(rs).strip())
+    except (ValueError, TypeError):
+        return False
+    return 0.5 <= v <= 18.0
+
+
 def weight_inputs(prefix: str) -> tuple[str, str, float, bool]:
     """Render the alloy / ring-size / target-weight inputs + run button.
 
-    `prefix` keeps widget keys unique across pages. Returns
+    Ring size is REQUIRED (it's the scale anchor): the estimate button stays
+    disabled until a valid US size is entered. Returns
     (alloy, ring_size, target_weight_g, run_clicked).
     """
     c1, c2, c3 = st.columns(3, gap="medium")
@@ -225,15 +235,23 @@ def weight_inputs(prefix: str) -> tuple[str, str, float, bool]:
         alloy = st.selectbox("Metal / alloy", _ALLOYS, index=0,
                              format_func=_pretty, key=f"{prefix}_alloy")
     with c2:
-        ring_size = st.text_input("Ring size (US) — scale reference",
+        ring_size = st.text_input("Ring size (US) — required",
                                   value="", placeholder="e.g. 6.5",
-                                  key=f"{prefix}_ring_size")
+                                  key=f"{prefix}_ring_size",
+                                  help="The scale anchor — the whole estimate "
+                                       "is calibrated to it, so it's required.")
     with c3:
         target_w = st.number_input("Target NET weight (g)", min_value=0.0,
                                    value=0.0, step=0.1, key=f"{prefix}_target_w",
                                    help="0 = use the estimated weight as-is")
+
+    rs_ok = is_demo() or _valid_ring_size(ring_size)
+    if not rs_ok:
+        st.caption("⚠️ Enter a valid **US ring size** (e.g. 6.5) to enable the "
+                   "estimate — it's the scale reference the math depends on.")
     run = st.button("⚖️ Estimate weight & price", type="primary",
-                    key=f"{prefix}_run", use_container_width=True)
+                    key=f"{prefix}_run", use_container_width=True,
+                    disabled=not rs_ok)
     return alloy, ring_size, target_w, run
 
 
