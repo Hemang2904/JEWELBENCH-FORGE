@@ -535,9 +535,10 @@ VIEW_PROMPTS = {
         "icon": "🔭",
         "prompt": (
             "Re-render this EXACT same ring from a straight head-on front "
-            "elevation, looking directly at the face of the head with the band "
-            "curving away symmetrically, showing head width and shoulder width. "
-            "ONLY the camera angle changes. " + _VIEW_COMMON
+            "elevation (orthographic, no perspective), looking directly at the "
+            "face of the head with the band curving away symmetrically, showing "
+            "head width and shoulder width. ONLY the camera angle changes. "
+            + _VIEW_COMMON
         ),
     },
     "Three-Quarter (45°)": {

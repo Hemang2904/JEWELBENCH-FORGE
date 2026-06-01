@@ -301,6 +301,13 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
     _xc = _dim_volume_check(est, ring_size)
     if _xc:
         st.caption(_xc)
+
+    # Reference-weight sanity (typical rings ~1.5-15 g; research band).
+    _gw = est.get("gold_weight_g") or 0
+    if _gw and (_gw < 0.8 or _gw > 50):
+        st.caption(f"⚠️ {_gw:.1f} g is outside the typical ring range "
+                   "(~1.5–15 g) — re-check dimensions, ring size and "
+                   "solid/hollow construction.")
     if est.get("single_model"):
         st.warning("⚠️ Only one model returned — the ensemble cross-check "
                    "didn't run, so treat this as a single-model estimate "

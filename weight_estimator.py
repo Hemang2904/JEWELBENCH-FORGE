@@ -126,6 +126,11 @@ def _apply_scale(est: dict, sc: float) -> None:
 _BAND_W_RANGE = (1.0, 12.0)   # mm, physical sanity clamps
 _BAND_T_RANGE = (0.8, 6.0)
 _SHANK_FILL = float(os.environ.get("SHANK_FILL_FACTOR", "0.85"))  # D-/comfort-fit
+# Solid vs hollow makes a big weight difference (research: ~30-50% less).
+_FILL_BY_CONSTRUCTION = {
+    "solid": 0.85, "partially-hollow": 0.68, "partially_hollow": 0.68,
+    "hollow": 0.50, "open-back": 0.55, "open_back": 0.55,
+}
 
 
 def parametric_shank_volume(inner_d_mm: float, band_w: float, band_t: float,
@@ -139,7 +144,8 @@ def parametric_shank_volume(inner_d_mm: float, band_w: float, band_t: float,
 def refine_shank_volume(est: dict) -> None:
     """Replace the model's shank-volume GUESS with the closed-form value from
     the calibrated band dimensions + known inner diameter, and fix the total to
-    match. No-op if band dims or inner diameter are missing."""
+    match. Fill factor reflects solid/hollow construction. No-op if band dims or
+    inner diameter are missing."""
     kd = est.get("key_dimensions_mm") or {}
     bw, bt = kd.get("band_width"), kd.get("band_thickness")
     inner = est.get("inner_diameter_mm")
@@ -148,7 +154,9 @@ def refine_shank_volume(est: dict) -> None:
     bw = min(max(float(bw), _BAND_W_RANGE[0]), _BAND_W_RANGE[1])
     bt = min(max(float(bt), _BAND_T_RANGE[0]), _BAND_T_RANGE[1])
     kd["band_width"], kd["band_thickness"] = round(bw, 2), round(bt, 2)
-    new_shank = parametric_shank_volume(float(inner), bw, bt)
+    fill = _FILL_BY_CONSTRUCTION.get(
+        str(est.get("band_construction", "")).strip().lower(), _SHANK_FILL)
+    new_shank = parametric_shank_volume(float(inner), bw, bt, fill)
     old_shank = float(est.get("shank_volume_mm3") or 0)
     total = float(est.get("total_metal_volume_mm3") or 0)
     est["shank_volume_mm3"] = round(new_shank, 1)
@@ -292,30 +300,39 @@ def _extract_json(text: str) -> dict | None:
 
 def _prompt(alloy: str, ring_size: str | None) -> str:
     scale_hint = (
-        f"The piece is a ring in US finger size {ring_size}; use the known "
-        f"inner band diameter for that size as your absolute scale reference."
+        f"SCALE ANCHOR: this ring is US finger size {ring_size}. The inside band "
+        f"diameter for that size is a KNOWN fixed number — measure inner_diameter_mm "
+        f"to match it, and judge every other dimension relative to it."
         if ring_size else
-        "No scale reference was provided; infer scale from typical ring "
-        "proportions and state lower confidence."
+        "No ring size given; infer scale from typical ring proportions and lower "
+        "your confidence."
     )
     return (
-        "You are a jewelry CAD estimator. The montage shows MULTIPLE views of "
-        "the SAME ring (orthographic top/side/front, three-quarter, a band "
-        "cross-section, a head macro, and an underside view). Use them together "
-        "— the cross-section and underside reveal band thickness and hollowing; "
-        "the top/macro reveal every stone. Estimate METAL VOLUME in cubic "
-        f"millimetres. {scale_hint}\n"
+        "You are a master jeweler and CAD estimator. Goal: estimate the METAL "
+        "VOLUME of this ONE ring accurately enough for a weight estimate within "
+        "about ±10%.\n"
+        "The montage is a jewelry SPEC SHEET of the SAME ring: orthographic TOP, "
+        "FRONT and SIDE (no perspective — MEASURE proportions from these), a 3/4 "
+        "perspective (overall mass), a band cross-section and an underside view "
+        "(these tell you band thickness and whether it is SOLID or HOLLOW), and a "
+        "head macro (setting volume). Cross-check every dimension across views.\n"
+        f"{scale_hint}\n"
+        "METHOD (geometric decomposition): the band is a hollow ring "
+        "(V ≈ π·(inner_diameter+thickness)·width·thickness); the head/setting and "
+        "any halo/shoulder framework are separate solids. Report mm dimensions and "
+        "per-component mm³ volumes; we convert to grams with metal density.\n"
         "Return ONLY a JSON object, no prose:\n"
         "{\n"
-        '  "inner_diameter_mm": <number, the INSIDE finger-hole diameter of '
-        'the band — measure it carefully; everything is scale-calibrated to '
-        'this>,\n'
-        '  "total_metal_volume_mm3": <number, solid metal body>,\n'
-        '  "shank_volume_mm3": <number, band/shank portion>,\n'
-        '  "head_volume_mm3": <number, head/setting portion>,\n'
-        '  "stone_seat_volume_mm3": <number, metal removed for stone seats>,\n'
+        '  "inner_diameter_mm": <inside finger-hole diameter — the scale anchor>,\n'
+        '  "total_metal_volume_mm3": <solid metal body = shank + head + accents>,\n'
+        '  "shank_volume_mm3": <band/shank metal only>,\n'
+        '  "head_volume_mm3": <head/setting/gallery metal only>,\n'
+        '  "accent_metal_volume_mm3": <halo/shoulder/pavé framework metal, '
+        'EXCLUDING the stones>,\n'
+        '  "stone_seat_volume_mm3": <metal removed to seat stones>,\n'
         '  "key_dimensions_mm": {"band_width": <n>, "band_thickness": <n>,\n'
         '     "head_height": <n>, "head_diameter": <n>},\n'
+        '  "band_construction": "solid|partially-hollow|hollow",\n'
         '  "stones": [\n'
         '    {"location": "center|halo|hidden_halo|three_stone|shank|pave|'
         'shoulder|gallery", "shape": "round|oval|pear|marquise|emerald|'
@@ -324,14 +341,15 @@ def _prompt(alloy: str, ring_size: str | None) -> str:
         "  ],\n"
         '  "confidence": "high|medium|low"\n'
         "}\n"
-        "CRITICAL for stones: enumerate EVERY distinct diamond/gemstone group "
-        "you can see across ALL views — center, halo, hidden halo, side/"
-        "three-stone, shank/pavé/channel, shoulder accents, gallery/peek-a-boo. "
-        "Miss none, do not merge different groups. Identify each SHAPE "
-        "correctly. Give BOTH length_mm and width_mm (for round, set "
-        "length=width=diameter; for oval/pear/marquise/emerald give the true "
-        "long and short axes). Report mm dimensions, never carats.\n"
-        f"Target alloy is {alloy} (affects nothing in your volume estimate)."
+        "RULES:\n"
+        "- Measure off the ORTHOGRAPHIC views; the band cross-section + underside "
+        "tell you construction — a HOLLOW or open-back band has ~30-50% less metal "
+        "than a solid one, so set band_construction honestly.\n"
+        "- Enumerate EVERY distinct stone group (center, halo, hidden halo, "
+        "three-stone, shank/pavé/channel, shoulder, gallery) with the correct "
+        "SHAPE and BOTH length_mm and width_mm (round: length=width=diameter).\n"
+        "- Everything in mm and mm³ — never carats or grams.\n"
+        f"Target alloy is {alloy} (does not affect your volume estimate)."
     )
 
 
