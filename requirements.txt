@@ -6,3 +6,6 @@ streamlit>=1.35.0
 fal-client==0.5.2
 python-dotenv>=1.0.0
 Pillow>=10.0.0
+# Optional: only needed if you add Opus to the weight ensemble (Opus isn't on
+# fal, so it's called via the Anthropic API directly).
+anthropic>=0.40.0

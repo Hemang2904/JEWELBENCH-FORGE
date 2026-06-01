@@ -385,12 +385,71 @@ def _build_montage(image_urls: list[str], cell: int = 768) -> str:
     return fal_client.upload(buf.getvalue(), content_type="image/png")
 
 
+def _is_anthropic_direct(model: str) -> bool:
+    """Opus (and any 'anthropic-direct/...' id) isn't on fal — call Anthropic's
+    API directly. Detected by 'opus' or an explicit 'anthropic-direct/' prefix."""
+    m = model.lower()
+    return m.startswith("anthropic-direct/") or "opus" in m
+
+
+def _anthropic_model_id(model: str) -> str:
+    for pre in ("anthropic-direct/", "anthropic/", "openrouter/"):
+        if model.startswith(pre):
+            return model[len(pre):]
+    return model
+
+
+def _call_anthropic_vision(model: str, montage_url: str, prompt: str,
+                           tries: int) -> dict:
+    """Direct Anthropic vision call (for Opus, which fal doesn't host).
+    Needs ANTHROPIC_API_KEY + the `anthropic` package."""
+    import base64
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return {"_model": model, "_error": "ANTHROPIC_API_KEY not set"}
+    try:
+        import anthropic
+    except ImportError:
+        return {"_model": model, "_error": "anthropic package not installed"}
+    try:
+        with urllib.request.urlopen(montage_url, timeout=20) as r:
+            b64 = base64.standard_b64encode(r.read()).decode()
+    except Exception as e:
+        return {"_model": model, "_error": f"montage fetch failed: {e}"}
+
+    client = anthropic.Anthropic()
+    real = _anthropic_model_id(model)
+    last_err = "unknown error"
+    for attempt in range(1, tries + 1):
+        try:
+            msg = client.messages.create(
+                model=real, max_tokens=2000,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64",
+                     "media_type": "image/png", "data": b64}},
+                    {"type": "text", "text": prompt},
+                ]}],
+            )
+            text = "".join(b.text for b in msg.content if b.type == "text")
+            parsed = _extract_json(text)
+            if parsed is not None and "total_metal_volume_mm3" in parsed:
+                parsed["_model"] = model
+                return parsed
+            last_err = "unparseable output / missing volume"
+        except Exception as e:
+            last_err = str(e)[:200]
+        if attempt < tries:
+            time.sleep(0.6 * attempt)
+    return {"_model": model, "_error": last_err}
+
+
 def _call_model(model: str, montage_url: str, prompt: str,
                 tries: int | None = None) -> dict:
-    """One model, with retries + tolerant parsing. Returns a parsed estimate
-    (with _model) or {"_model", "_error"} after exhausting retries."""
-    import fal_client  # lazy
+    """One model, with retries + tolerant parsing. Routes Opus/anthropic-direct
+    ids to the Anthropic API; everything else goes through fal."""
     tries = WEIGHT_CALL_RETRIES if tries is None else tries
+    if _is_anthropic_direct(model):
+        return _call_anthropic_vision(model, montage_url, prompt, tries)
+    import fal_client  # lazy
     last_err = "unknown error"
     for attempt in range(1, tries + 1):
         try:
