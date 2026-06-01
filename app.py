@@ -587,6 +587,34 @@ VIEW_PROMPTS = {
 }
 
 
+# Kontext is an EDIT model — a heavy "don't change anything" prompt makes it a
+# no-op (returns the same image). It DOES handle viewpoint when asked as a plain
+# imperative camera move, so use these when VIEW_MODEL is a Kontext id.
+_KONTEXT_CAMERA = {
+    "Top-Down (plan)": "Rotate the camera to look straight down at this exact ring from directly overhead — a top-down plan view.",
+    "Side Profile (90°)": "Rotate the camera to a pure 90-degree side profile of this exact ring, showing the full band thickness and head-height silhouette.",
+    "Front Elevation": "Rotate the camera to a straight head-on front view of this exact ring, looking directly at the head.",
+    "Three-Quarter (45°)": "Rotate the camera to a 45-degree three-quarter hero angle of this exact ring.",
+    "Band Edge & Thickness": "Move the camera in close on the bottom edge of the band of this exact ring to show its width, thickness and cross-section profile.",
+    "Head & Setting Macro": "Move the camera into an extreme macro close-up of the head and setting of this exact ring.",
+    "Underside / Gallery": "Rotate the camera to view this exact ring from directly underneath, showing the gallery rails and the underside of the head.",
+}
+_KONTEXT_SUFFIX = (
+    " Keep the same ring — identical metal color, stones, engraving, motif and "
+    "proportions; change ONLY the camera viewpoint. Pure white background, "
+    "professional jewelry product photography."
+)
+
+
+def view_prompt_for(name: str) -> str:
+    """Pick the prompt for the active VIEW_MODEL: an imperative camera move for
+    Kontext (so it actually re-angles instead of returning the same image), the
+    detailed identity-locked prompt for nano-banana and others."""
+    if "kontext" in VIEW_MODEL.lower():
+        return _KONTEXT_CAMERA.get(name, VIEW_PROMPTS[name]["prompt"]) + _KONTEXT_SUFFIX
+    return VIEW_PROMPTS[name]["prompt"]
+
+
 def generate_view(base_url, view_prompt, model=None):
     """Render one camera view. Builds model-appropriate arguments because
     Flux Kontext (image_url, guidance) and nano-banana (image_urls, resolution)
@@ -600,7 +628,7 @@ def generate_view(base_url, view_prompt, model=None):
             "image_url": base_url,
             "prompt": view_prompt,
             "num_images": 1,
-            "guidance_scale": 3.5,
+            "guidance_scale": float(os.environ.get("KONTEXT_GUIDANCE", "4.0")),
             "output_format": "png",
             "safety_tolerance": "5",
         }
@@ -1282,7 +1310,7 @@ if st.session_state.get("last_results"):
                     with ThreadPoolExecutor(max_workers=len(_rv_names)) as _ex:
                         _futs = {
                             _ex.submit(generate_view, r_best_url,
-                                       VIEW_PROMPTS[n]["prompt"],
+                                       view_prompt_for(n),
                                        VIEW_PROMPTS[n]["model"]): n
                             for n in _rv_names
                         }
@@ -1340,7 +1368,7 @@ if st.session_state.get("last_results"):
                         executor.submit(
                             generate_view,
                             base_design_url,
-                            VIEW_PROMPTS[name]["prompt"],
+                            view_prompt_for(name),
                             VIEW_PROMPTS[name]["model"],
                         ): name
                         for name in view_names
@@ -1411,7 +1439,7 @@ if st.session_state.get("last_results"):
             ):
                 with st.spinner(f"Rendering {view_name}..."):
                     try:
-                        result = generate_view(base_design_url, cfg["prompt"], cfg["model"])
+                        result = generate_view(base_design_url, view_prompt_for(view_name), cfg["model"])
                         url = extract_image_url(result)
                         if url:
                             st.session_state.setdefault("views", {})[view_name] = url
