@@ -1,0 +1,4 @@
+piece_id,ring_size,metal,actual_weight_g,images
+ring001,7,18k_yellow_gold,5.80,/abs/path/ring001_top.jpg;/abs/path/ring001_side.jpg;/abs/path/ring001_front.jpg
+ring002,6.5,14k_white_gold,,https://example.com/ring002.png
+ring003,8,platinum_950,9.42,/abs/path/ring003.jpg
