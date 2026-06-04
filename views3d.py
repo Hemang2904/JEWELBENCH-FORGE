@@ -49,9 +49,6 @@ VIEW_3D_CAMERA = {
     "Side Profile (90°)":    (90.0,  0.0, 1.0,  0.0),
     "Front Elevation":       (0.0,   0.0, 1.0,  0.0),
     "Three-Quarter (45°)":   (45.0, 30.0, 1.0,  0.0),
-    "Band Edge & Thickness": (90.0,-12.0, 1.45, 0.22),  # zoom the shank bottom
-    "Head & Setting Macro":  (0.0,  12.0, 1.8, -0.30),  # zoom the head/top
-    "Underside / Gallery":   (0.0, -90.0, 1.0,  0.0),
 }
 # Canonical fallback for any unmapped name.
 _DEFAULT_CAM = (45.0, 30.0, 1.0, 0.0)

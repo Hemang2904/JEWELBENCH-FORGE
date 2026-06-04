@@ -557,40 +557,6 @@ VIEW_PROMPTS = {
             + _VIEW_COMMON
         ),
     },
-    "Band Edge & Thickness": {
-        "model": VIEW_MODEL,
-        "icon": "📏",
-        "prompt": (
-            "Re-render this EXACT same ring zoomed in on the BOTTOM of the "
-            "shank, viewed slightly from the edge so the band's WIDTH, WALL "
-            "THICKNESS and cross-sectional profile (flat / D-shape / domed / "
-            "comfort-fit) are clearly readable. Keep the ENTIRE ring fully "
-            "SOLID, opaque and photorealistic in its real metal color — "
-            "absolutely NO transparency, NO ghosting, NO x-ray, NO faded, "
-            "washed-out or translucent effect. ONLY the camera framing "
-            "changes. " + _VIEW_COMMON
-        ),
-    },
-    "Head & Setting Macro": {
-        "model": VIEW_MODEL,
-        "icon": "🔬",
-        "prompt": (
-            "Re-render this EXACT same ring as an extreme macro close-up of the "
-            "head and setting — crown, prongs, basket/gallery, and center stone "
-            "seat — filling the frame so the SETTING METAL VOLUME is clear. "
-            "ONLY the camera distance changes. " + _VIEW_COMMON
-        ),
-    },
-    "Underside / Gallery": {
-        "model": VIEW_MODEL,
-        "icon": "🔄",
-        "prompt": (
-            "Re-render this EXACT same ring viewed from directly UNDERNEATH, "
-            "showing the gallery rails, the underside of the head/basket, any "
-            "hollowing or open-back, and how much metal sits below the finger. "
-            "ONLY the camera angle changes. " + _VIEW_COMMON
-        ),
-    },
 }
 
 
