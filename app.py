@@ -608,10 +608,17 @@ _KONTEXT_SUFFIX = (
 
 
 def view_prompt_for(name: str) -> str:
-    """Pick the prompt for the active VIEW_MODEL: an imperative camera move for
-    Kontext (so it actually re-angles instead of returning the same image), the
-    detailed identity-locked prompt for nano-banana and others."""
-    if "kontext" in VIEW_MODEL.lower():
+    """Pick the prompt for the active VIEW_MODEL.
+
+    Image-EDIT models (Kontext, nano-banana-pro/edit, anything ``/edit``) anchor
+    hard to the input image: a long "reproduce IDENTICALLY / change NOTHING"
+    block (``_VIEW_COMMON``) drowns out the one camera sentence and the model
+    returns the SAME pose every time (all views look like the input 3/4 angle).
+    So for any edit model we lead with a short, imperative camera move and keep
+    the identity-lock to a brief suffix. Text-to-image / non-edit models get the
+    detailed identity-locked prompt where the heavy block is appropriate."""
+    m = VIEW_MODEL.lower()
+    if "kontext" in m or "/edit" in m or "/flux" in m:
         return _KONTEXT_CAMERA.get(name, VIEW_PROMPTS[name]["prompt"]) + _KONTEXT_SUFFIX
     return VIEW_PROMPTS[name]["prompt"]
 
