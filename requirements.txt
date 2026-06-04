@@ -9,3 +9,8 @@ Pillow>=10.0.0
 # Optional: only needed if you add Opus to the weight ensemble (Opus isn't on
 # fal, so it's called via the Anthropic API directly).
 anthropic>=0.40.0
+# Geometry-grounded Additional Views (VIEW_ENGINE=geometry, views3d.py): load the
+# fal image-to-3D GLB and rasterise true orthographic angles. Pure numpy+Pillow
+# software render — NO OpenGL/EGL needed, so it runs headless on Streamlit Cloud.
+trimesh>=4.0.0
+numpy>=1.24.0

@@ -496,6 +496,12 @@ def upload_to_fal(uploaded_file):
 # camera-change prompt). The strong identity prompt below curbs design drift.
 VIEW_MODEL = os.environ.get("VIEW_MODEL", "fal-ai/nano-banana-pro/edit")
 
+# Additional-Views engine: "edit" (default) re-prompts an image-edit model;
+# "geometry" reconstructs a 3D mesh (fal image-to-3D) and renders TRUE
+# orthographic angles — the only way to get a real top-down / underside view.
+# See views3d.py. Falls back to "edit" automatically if the 3D path errors.
+VIEW_ENGINE = os.environ.get("VIEW_ENGINE", "edit").lower()
+
 _VIEW_COMMON = (
     "CRITICAL — CONSISTENCY: this is the SAME single physical ring being "
     "photographed again, only from a new camera viewpoint. Its design is FIXED "
@@ -1366,42 +1372,64 @@ if st.session_state.get("last_results"):
     # Batch button
     _vbatch_col = st.columns([1, 3, 1])[1]
     with _vbatch_col:
-        if st.button("⚡ Generate All Views (parallel)", key="view_btn_all", use_container_width=True, type="primary"):
-            from concurrent.futures import ThreadPoolExecutor, as_completed
-            with st.status(f"Rendering {len(view_names)} views in parallel...", expanded=True) as _vs:
-                _vresults = {}
-                _verrors = {}
-                with ThreadPoolExecutor(max_workers=len(view_names)) as executor:
-                    futures = {
-                        executor.submit(
-                            generate_view,
-                            base_design_url,
-                            view_prompt_for(name),
-                            VIEW_PROMPTS[name]["model"],
-                        ): name
-                        for name in view_names
-                    }
-                    for future in as_completed(futures):
-                        name = futures[future]
-                        try:
-                            result = future.result()
-                            url = extract_image_url(result)
-                            if url:
-                                _vresults[name] = url
-                                st.write(f"✓ {name}")
-                            else:
-                                _verrors[name] = "no image returned"
-                        except Exception as e:
-                            _verrors[name] = str(e)
-                if _vresults:
-                    st.session_state.setdefault("views", {}).update(_vresults)
-                for n, msg in _verrors.items():
-                    st.warning(f"{n} failed: {msg}")
-                _vs.update(
-                    label=f"Done — {len(_vresults)}/{len(view_names)} views rendered",
-                    state="complete" if not _verrors else "error",
-                )
+        _batch_label = ("🧊 Generate All Views (3D)" if VIEW_ENGINE == "geometry"
+                        else "⚡ Generate All Views (parallel)")
+        if st.button(_batch_label, key="view_btn_all", use_container_width=True, type="primary"):
+            _vresults = {}
+            _verrors = {}
+
+            if VIEW_ENGINE == "geometry":
+                # One image-to-3D call, then render every angle from that mesh —
+                # mutually consistent and a single 3D-generation cost.
+                with st.status("Reconstructing 3D mesh and rendering true "
+                               "orthographic angles...", expanded=True) as _vs:
+                    try:
+                        import views3d
+                        st.write("Building 3D mesh from the base design…")
+                        _vresults, _glb = views3d.generate_3d_views(base_design_url, view_names)
+                        st.session_state["views_glb_url"] = _glb
+                        for n in _vresults:
+                            st.write(f"✓ {n}")
+                        _vs.update(label=f"Done — {len(_vresults)} views rendered from geometry",
+                                   state="complete")
+                    except Exception as e:
+                        _vs.update(label="3D path failed — falling back to edit model",
+                                   state="error")
+                        st.warning(f"Geometry engine error: {e}")
+            else:
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                with st.status(f"Rendering {len(view_names)} views in parallel...", expanded=True) as _vs:
+                    with ThreadPoolExecutor(max_workers=len(view_names)) as executor:
+                        futures = {
+                            executor.submit(
+                                generate_view,
+                                base_design_url,
+                                view_prompt_for(name),
+                                VIEW_PROMPTS[name]["model"],
+                            ): name
+                            for name in view_names
+                        }
+                        for future in as_completed(futures):
+                            name = futures[future]
+                            try:
+                                result = future.result()
+                                url = extract_image_url(result)
+                                if url:
+                                    _vresults[name] = url
+                                    st.write(f"✓ {name}")
+                                else:
+                                    _verrors[name] = "no image returned"
+                            except Exception as e:
+                                _verrors[name] = str(e)
+                    for n, msg in _verrors.items():
+                        st.warning(f"{n} failed: {msg}")
+                    _vs.update(
+                        label=f"Done — {len(_vresults)}/{len(view_names)} views rendered",
+                        state="complete" if not _verrors else "error",
+                    )
+
             if _vresults:
+                st.session_state.setdefault("views", {}).update(_vresults)
                 st.toast(f"{len(_vresults)} view(s) rendered!", icon="✨")
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1419,16 +1447,24 @@ if st.session_state.get("last_results"):
             if vurl:
                 st.markdown('<div class="result-card">', unsafe_allow_html=True)
                 st.image(vurl, use_container_width=True)
-                st.markdown(
-                    f"""<div class="result-label">
-                        <span style="font-size:0.78rem">{view_name}</span>
-                        <a href="{vurl}" target="_blank"
-                           style="color:var(--cyan);text-decoration:none;font-size:0.75rem;font-weight:600;">
-                            ↓
-                        </a>
-                    </div></div>""",
-                    unsafe_allow_html=True,
-                )
+                if isinstance(vurl, (bytes, bytearray)):
+                    # geometry render — bytes, offer a PNG download
+                    st.markdown(f'<div class="result-label"><span style="font-size:0.78rem">{view_name}</span></div></div>',
+                                unsafe_allow_html=True)
+                    st.download_button("↓ PNG", data=bytes(vurl),
+                                       file_name=f"{view_name}.png", mime="image/png",
+                                       key=f"dl_{view_name}", use_container_width=True)
+                else:
+                    st.markdown(
+                        f"""<div class="result-label">
+                            <span style="font-size:0.78rem">{view_name}</span>
+                            <a href="{vurl}" target="_blank"
+                               style="color:var(--cyan);text-decoration:none;font-size:0.75rem;font-weight:600;">
+                                ↓
+                            </a>
+                        </div></div>""",
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.markdown(
                     f'<div class="view-placeholder">'
@@ -1447,14 +1483,27 @@ if st.session_state.get("last_results"):
             ):
                 with st.spinner(f"Rendering {view_name}..."):
                     try:
-                        result = generate_view(base_design_url, view_prompt_for(view_name), cfg["model"])
-                        url = extract_image_url(result)
-                        if url:
-                            st.session_state.setdefault("views", {})[view_name] = url
+                        if VIEW_ENGINE == "geometry":
+                            import views3d
+                            _glb = st.session_state.get("views_glb_url")
+                            if _glb:
+                                # re-render this angle from the cached mesh — no new 3D gen
+                                _one = views3d.render_from_glb_url(_glb, [view_name])
+                            else:
+                                _one, _glb = views3d.generate_3d_views(base_design_url, [view_name])
+                                st.session_state["views_glb_url"] = _glb
+                            st.session_state.setdefault("views", {})[view_name] = _one[view_name]
                             st.toast(f"{view_name} ready!", icon=cfg["icon"])
                             st.rerun()
                         else:
-                            st.warning(f"{view_name} produced no image.")
+                            result = generate_view(base_design_url, view_prompt_for(view_name), cfg["model"])
+                            url = extract_image_url(result)
+                            if url:
+                                st.session_state.setdefault("views", {})[view_name] = url
+                                st.toast(f"{view_name} ready!", icon=cfg["icon"])
+                                st.rerun()
+                            else:
+                                st.warning(f"{view_name} produced no image.")
                     except Exception as e:
                         st.error(f"{view_name} failed: {e}")
 
