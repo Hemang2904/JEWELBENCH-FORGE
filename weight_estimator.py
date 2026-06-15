@@ -349,21 +349,38 @@ def _finalize_confidence(out: dict, typed_ring: bool, clamped: bool) -> dict:
 
 
 def scale_to_target(estimate: dict, target_weight_g: float) -> dict:
-    """Scale so GOLD weight hits the user's target. Linear on volume->weight;
-    scales volume and the shank range too so dimensions stay consistent."""
+    """Scale the whole METAL geometry so the gold weight equals a user TARGET.
+
+    The target pins the ABSOLUTE metal volume (the part vision is worst at), so
+    the image only has to supply PROPORTIONS. Metal volume scales linearly
+    (k = target / current); every metal LINEAR dimension scales by k**(1/3),
+    because volume ∝ size³ — so the band, head and overall proportions stay
+    physically consistent and the printed dimensions correspond exactly to the
+    target weight. Gemstones are NOT metal, so stones/carats are left unchanged.
+    No-op without a positive base weight + target."""
     base = estimate.get("gold_weight_g") or 0.0
     if base <= 0 or target_weight_g <= 0:
         return {**estimate, "target_scale": 1.0}
     k = target_weight_g / base
+    kd_scale = k ** (1.0 / 3.0)  # linear dims scale by the cube-root of volume
+    out = {**estimate, "target_scale": round(k, 4),
+           "gold_weight_g": round(base * k, 3)}
+    # metal volumes scale linearly with weight
+    for vk in ("volume_mm3", "total_metal_volume_mm3", "shank_volume_mm3",
+               "head_volume_mm3", "accent_metal_volume_mm3", "stone_seat_volume_mm3"):
+        if estimate.get(vk):
+            out[vk] = round(float(estimate[vk]) * k, 1)
     lo, hi = estimate.get("shank_weight_range_g", [0, 0])
-    return {
-        **estimate,
-        "target_scale": round(k, 4),
-        "gold_weight_g": round(base * k, 3),
-        "volume_mm3": round((estimate.get("volume_mm3") or 0) * k, 1),
-        "shank_volume_mm3": round((estimate.get("shank_volume_mm3") or 0) * k, 1),
-        "shank_weight_range_g": [round(lo * k, 3), round(hi * k, 3)],
-    }
+    out["shank_weight_range_g"] = [round(lo * k, 3), round(hi * k, 3)]
+    # metal linear dimensions scale by cube-root so proportions are preserved
+    kd = dict(estimate.get("key_dimensions_mm") or {})
+    for dk in ("band_width", "band_thickness", "head_height", "head_diameter"):
+        if kd.get(dk):
+            kd[dk] = round(float(kd[dk]) * kd_scale, 2)
+    if kd:
+        out["key_dimensions_mm"] = kd
+    # stones (gemstones) are independent of METAL weight — left unchanged.
+    return out
 
 
 # ── Vision I/O ───────────────────────────────────────────────────────────────
