@@ -122,7 +122,7 @@ def _derive_band_dims(est: dict, ring_size: str):
     if not (inner and shank_vol):
         return (round(float(bw), 2) if bw else None,
                 round(float(bt), 2) if bt else None)
-    ratio = 1.3  # typical width:thickness if neither is known
+    ratio = 1.18  # band width:thickness, fitted to the c113 catalog (was 1.3 guess)
     bt_v = float(bt) if bt else 1.8
     for _ in range(8):  # iterate: area depends on thickness via centerline
         area = shank_vol / (inner + math.pi * bt_v)
@@ -141,7 +141,9 @@ def _measurements(est: dict, metal: dict, dia: dict, ring_size: str) -> dict:
     kd = est.get("key_dimensions_mm") or {}
     cmm = center.get("length_mm") if center else None
     hd = kd.get("head_diameter") or (round(float(cmm) * 1.4, 1) if cmm else None)
-    hh = kd.get("head_height") or (round(float(cmm) * 1.1, 1) if cmm else None)
+    # head_height fallback fitted to the c113 catalog (median head/center = 0.88,
+    # n=104); the model supplies head_height directly when it can.
+    hh = kd.get("head_height") or (round(float(cmm) * 0.88, 1) if cmm else None)
     return {
         "gold_weight_g": metal["gold_weight_g"],
         "ring_size": ring_size or "—",
