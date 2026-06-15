@@ -241,14 +241,22 @@ def weight_inputs(prefix: str) -> tuple[str, str, float, bool]:
                                   help="The scale anchor — the whole estimate "
                                        "is calibrated to it, so it's required.")
     with c3:
-        target_w = st.number_input("Target NET weight (g)", min_value=0.0,
-                                   value=0.0, step=0.1, key=f"{prefix}_target_w",
-                                   help="0 = use the estimated weight as-is")
+        target_w = st.number_input("Target metal weight (g) — optional",
+                                   min_value=0.0, value=0.0, step=0.1,
+                                   key=f"{prefix}_target_w",
+                                   help="Set a target to DESIGN to it: the metal "
+                                        "weight becomes exact and every dimension is "
+                                        "derived to match (the image is used only for "
+                                        "proportions). Leave 0 to estimate the weight "
+                                        "from the image instead.")
 
     rs_ok = is_demo() or _valid_ring_size(ring_size)
     if not rs_ok:
         st.caption("⚠️ Enter a valid **US ring size** (e.g. 6.5) to enable the "
                    "estimate — it's the scale reference the math depends on.")
+    if target_w and target_w > 0:
+        st.caption(f"🎯 **Design mode** — output will be sized to a **{target_w:.2f} g** "
+                   "metal target: weight exact, dimensions derived to match.")
     run = st.button("⚖️ Estimate weight & price", type="primary",
                     key=f"{prefix}_run", use_container_width=True,
                     disabled=not rs_ok)
@@ -269,16 +277,28 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         st.error(f"Weight estimate failed: {est['_error']}")
         return
 
-    if target_w and target_w > 0:
+    targeted = bool(target_w and target_w > 0)
+    if targeted:
         est = we.scale_to_target(est, float(target_w))
 
     # ── Weight summary (single GOLD weight) ──────────────────────────────────
     shank_lo, shank_hi = est.get("shank_weight_range_g", [0, 0])
     m1, m2, m3 = st.columns(3, gap="medium")
-    m1.metric("Gold weight", f"{est.get('gold_weight_g', 0):.2f} g")
+    m1.metric("Gold weight" + (" · target" if targeted else ""),
+              f"{est.get('gold_weight_g', 0):.2f} g")
     m2.metric("Volume", f"{est.get('volume_mm3', 0):,.0f} mm³")
-    m3.metric("Confidence", est.get("confidence", "—").title(),
-              f"Δ models {est.get('model_disagreement', 0):.0%}")
+    if targeted:
+        m3.metric("Mode", "🎯 Designed", "weight = your target")
+    else:
+        m3.metric("Confidence", est.get("confidence", "—").title(),
+                  f"Δ models {est.get('model_disagreement', 0):.0%}")
+
+    if targeted:
+        st.success(
+            f"🎯 **Designed to a {est.get('gold_weight_g', 0):.2f} g metal target** — the "
+            "metal weight is exact (your input) and every dimension below is derived to "
+            "match it; the image supplies only proportions, so there is no dependence on "
+            "visual size estimation.")
 
     st.caption(
         f"Shank weight range: **{shank_lo:.2f}–{shank_hi:.2f} g** · "
@@ -287,8 +307,11 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         f"models: {', '.join(str(m) for m in est.get('models', []))}"
     )
 
-    # Scale calibration status — the math is anchored to the known ring size.
-    if est.get("uncalibrated"):
+    # Scale calibration status — ring size anchors the geometry.
+    if targeted:
+        st.caption("📐 Dimensions are derived to the target weight and anchored to "
+                   f"US ring size {ring_size}; the image supplies proportions only.")
+    elif est.get("uncalibrated"):
         st.error("⚠️ **Uncalibrated weight** — a ring size was given but the "
                  "model's geometry couldn't be anchored to it, so this weight is "
                  "**not scale-calibrated**. Treat as low-confidence; re-run with "
@@ -308,7 +331,7 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
         st.warning("⚠️ No ring size — the solver can't calibrate scale, so "
                    "values may be off. Enter the ring size for accurate math.")
 
-    if est.get("confidence_reason"):
+    if not targeted and est.get("confidence_reason"):
         st.caption(f"ℹ️ Confidence note: {est['confidence_reason']}.")
 
     # Surface any unrecognized band-construction strings (silently defaulted to
