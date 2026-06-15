@@ -29,6 +29,7 @@ import json
 import math
 import os
 import re
+import sys
 import time
 import urllib.request
 
@@ -57,14 +58,25 @@ CASTING_FACTOR = float(os.environ.get("CASTING_FACTOR", "0.97"))
 RANGE_PAD = float(os.environ.get("WEIGHT_RANGE_PAD", "0.05"))
 
 # Alloy densities g/cm^3 (env-overridable). Keyed by the same alloy codes the
-# rest of the app uses.
+# rest of the app uses. White and rose/red golds are MEANINGFULLY less dense
+# than yellow at the same karat (different alloying metals), so they get their
+# own keys — collapsing them to the yellow value made white gold read ~6% heavy.
+# Defaults are Stuller published specific gravities (alloy-system dependent —
+# e.g. palladium-white runs denser than nickel-white — so all are env-overridable
+# and should be calibrated against ground-truth weights where possible).
+#   https://www.stuller.com/articles/view/specific-gravity-melting-point-or-various-metals-and-alloys/
 _DENSITY_DEFAULTS = {
-    "24k": 19.32, "22k": 17.80, "18k": 15.60, "14k": 13.07,
+    "24k": 19.32, "22k": 17.80,
+    "18k": 15.60, "18k_white": 14.64, "18k_rose": 15.18,
+    "14k": 13.07, "14k_white": 12.61, "14k_rose": 13.26,
     "10k": 11.60, "pt950": 20.10, "ag925": 10.36,
 }
 _DENSITY_ENV = {
     "24k": "DENSITY_24K_GOLD", "22k": "DENSITY_22K_GOLD",
-    "18k": "DENSITY_18K_GOLD", "14k": "DENSITY_14K_GOLD",
+    "18k": "DENSITY_18K_GOLD",
+    "18k_white": "DENSITY_18K_WHITE_GOLD", "18k_rose": "DENSITY_18K_ROSE_GOLD",
+    "14k": "DENSITY_14K_GOLD",
+    "14k_white": "DENSITY_14K_WHITE_GOLD", "14k_rose": "DENSITY_14K_ROSE_GOLD",
     "10k": "DENSITY_10K_GOLD", "pt950": "DENSITY_PLATINUM_950",
     "ag925": "DENSITY_SILVER_925",
 }
@@ -72,8 +84,10 @@ _DENSITY_ENV = {
 # Map full alloy names (as used in the BoM) -> density code.
 _ALLOY_TO_DENSITY_KEY = {
     "24k_yellow_gold": "24k", "22k_yellow_gold": "22k",
-    "18k_yellow_gold": "18k", "18k_white_gold": "18k", "18k_rose_gold": "18k",
-    "14k_yellow_gold": "14k", "14k_white_gold": "14k", "14k_rose_gold": "14k",
+    "18k_yellow_gold": "18k",
+    "18k_white_gold": "18k_white", "18k_rose_gold": "18k_rose",
+    "14k_yellow_gold": "14k",
+    "14k_white_gold": "14k_white", "14k_rose_gold": "14k_rose",
     "10k_yellow_gold": "10k", "platinum_950": "pt950", "silver_925": "ag925",
 }
 
@@ -90,6 +104,38 @@ def volume_to_weight(volume_mm3: float, density_g_cm3: float,
                      casting: float = CASTING_FACTOR) -> float:
     """mm^3 -> grams.  1 cm^3 = 1000 mm^3."""
     return round(max(0.0, volume_mm3) / 1000.0 * density_g_cm3 * casting, 3)
+
+
+# ── Estimate validation (reject non-finite / impossible model output) ─────────
+
+_VOLUME_KEYS = (
+    "total_metal_volume_mm3", "shank_volume_mm3", "head_volume_mm3",
+    "accent_metal_volume_mm3", "stone_seat_volume_mm3",
+)
+
+
+def _has_valid_total(d: dict) -> bool:
+    """True only if total_metal_volume_mm3 is a FINITE positive number. Models
+    occasionally emit NaN/Infinity (json.loads parses both) or a string — those
+    must never enter the ensemble, where the mean would propagate inf straight
+    to grams."""
+    try:
+        v = float(d.get("total_metal_volume_mm3"))
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(v) and v > 0.0
+
+
+def _sanitize_volumes(d: dict) -> None:
+    """Coerce any non-finite/garbage component volume to 0.0 in place, so a bad
+    head/shank/accent reading can't poison reconcile()."""
+    for k in _VOLUME_KEYS:
+        if k in d:
+            try:
+                v = float(d[k])
+                d[k] = v if math.isfinite(v) else 0.0
+            except (TypeError, ValueError):
+                d[k] = 0.0
 
 
 # Scale clamp: a wildly wrong model inner-diameter shouldn't blow up the solve.
@@ -131,6 +177,21 @@ _FILL_BY_CONSTRUCTION = {
     "solid": 0.85, "partially-hollow": 0.68, "partially_hollow": 0.68,
     "hollow": 0.50, "open-back": 0.55, "open_back": 0.55,
 }
+# Normalised lookup so hyphens / underscores / spaces all collapse to one key.
+_FILL_NORM = {k.replace("-", "_"): v for k, v in _FILL_BY_CONSTRUCTION.items()}
+
+
+def _construction_fill(raw) -> tuple[float, str | None]:
+    """Resolve a band_construction string to a fill factor.
+
+    Returns (fill, unrecognized): unrecognized is the original string when it
+    matched no known construction, so the caller can WARN rather than the old
+    silent fall-through to solid 0.85 — which quietly made any typo
+    ('open back', 'partially hollow', '') a ~40% heavier shank."""
+    key = str(raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if key in _FILL_NORM:
+        return _FILL_NORM[key], None
+    return _SHANK_FILL, (str(raw) if raw not in (None, "") else "(missing)")
 
 
 def parametric_shank_volume(inner_d_mm: float, band_w: float, band_t: float,
@@ -154,8 +215,9 @@ def refine_shank_volume(est: dict) -> None:
     bw = min(max(float(bw), _BAND_W_RANGE[0]), _BAND_W_RANGE[1])
     bt = min(max(float(bt), _BAND_T_RANGE[0]), _BAND_T_RANGE[1])
     kd["band_width"], kd["band_thickness"] = round(bw, 2), round(bt, 2)
-    fill = _FILL_BY_CONSTRUCTION.get(
-        str(est.get("band_construction", "")).strip().lower(), _SHANK_FILL)
+    fill, unrecognized = _construction_fill(est.get("band_construction"))
+    if unrecognized is not None:
+        est["_construction_warning"] = unrecognized
     new_shank = parametric_shank_volume(float(inner), bw, bt, fill)
     old_shank = float(est.get("shank_volume_mm3") or 0)
     total = float(est.get("total_metal_volume_mm3") or 0)
@@ -176,10 +238,16 @@ def calibrate_to_ring_size(estimate: dict, ring_size) -> dict:
     model_id = float(estimate.get("inner_diameter_mm") or 0)
     if known <= 0 or model_id <= 0:
         estimate["_scale_applied"] = 1.0
+        estimate["_scale_clamped"] = False
         return estimate
-    sc = max(_SCALE_MIN, min(_SCALE_MAX, known / model_id))
+    raw_sc = known / model_id
+    sc = max(_SCALE_MIN, min(_SCALE_MAX, raw_sc))
     _apply_scale(estimate, sc)
     estimate["_scale_applied"] = round(sc, 3)
+    # Flag when the model's absolute-mm guess was so far off that the scale had
+    # to be clamped — the geometry is then only loosely anchored, so downstream
+    # confidence should be downgraded rather than read as calibrated.
+    estimate["_scale_clamped"] = not (_SCALE_MIN <= raw_sc <= _SCALE_MAX)
     estimate["inner_diameter_mm"] = round(known, 2)
     return estimate
 
@@ -256,6 +324,28 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
         "confidence": confidence,
         "_per_model": estimates,
     }
+
+
+def _finalize_confidence(out: dict, typed_ring: bool, clamped: bool) -> dict:
+    """Honesty pass on the reconciled output.
+
+    A typed ring size that produced NO actual scale calibration means the
+    geometry was never anchored to the known size, so the gram number must not
+    be surfaced as confident (the dangerous false-confidence case: two models
+    that agree but are both uncalibrated). Also downgrades when the scale clamp
+    was hit or no ring size was given at all. Pure; mutates and returns `out`."""
+    uncalibrated = bool(typed_ring and not out.get("scale_calibrated"))
+    out["uncalibrated"] = uncalibrated
+    out["scale_clamped"] = bool(clamped)
+    if (not typed_ring) or uncalibrated or clamped:
+        out["confidence"] = "low"
+        out["confidence_reason"] = (
+            "no ring size given — weight is not scale-calibrated"
+            if not typed_ring else
+            "ring size given but the model geometry could not be scale-anchored"
+            if uncalibrated else
+            "scale calibration hit its safety clamp — dimensions may be off")
+    return out
 
 
 def scale_to_target(estimate: dict, target_weight_g: float) -> dict:
@@ -353,22 +443,63 @@ def _prompt(alloy: str, ring_size: str | None) -> str:
     )
 
 
-def _build_montage(image_urls: list[str], cell: int = 768) -> str:
+def _load_image_bytes(u) -> bytes | None:
+    """Return raw image bytes from any reference the pipeline produces:
+    a bytes object (geometry-mode views are PNG BYTES), a data: URL, an
+    http(s) URL, or a local file path. None if it can't be loaded.
+
+    The old montage loader only did urllib.urlopen(), which RAISED on bytes and
+    was silently swallowed — so geometry-mode views (the consistent ones) never
+    reached the weight estimate and it ran on the base image alone."""
+    if isinstance(u, (bytes, bytearray)):
+        return bytes(u)
+    if not isinstance(u, str):
+        return None
+    if u.startswith("data:"):
+        import base64
+        try:
+            return base64.b64decode(u.split(",", 1)[1])
+        except Exception:
+            return None
+    if u.startswith(("http://", "https://")):
+        try:
+            with urllib.request.urlopen(u, timeout=15) as r:
+                return r.read()
+        except Exception:
+            return None
+    try:  # local filesystem path
+        with open(u, "rb") as fh:
+            return fh.read()
+    except Exception:
+        return None
+
+
+def _build_montage(image_urls: list, cell: int = 768) -> str:
     """Stitch up to 5 reference images into one montage and upload to fal.
 
+    Accepts URLs, local paths, data: URLs, OR raw PNG bytes (geometry views).
     Returns the montage URL. Requires Pillow + fal_client (imported lazily so
     the pure-math part of this module imports without them).
     """
     from PIL import Image  # lazy
     import fal_client       # lazy
 
+    items = list(image_urls or [])[:8]
     imgs = []
-    for u in image_urls[:8]:
+    for u in items:
+        raw = _load_image_bytes(u)
+        if raw is None:
+            continue
         try:
-            with urllib.request.urlopen(u, timeout=15) as r:
-                imgs.append(Image.open(io.BytesIO(r.read())).convert("RGB"))
+            imgs.append(Image.open(io.BytesIO(raw)).convert("RGB"))
         except Exception:
             continue
+    dropped = len(items) - len(imgs)
+    if dropped:
+        # Surface silent drops — a montage running on fewer views than the UI
+        # claims ("reads 7 views") is a real accuracy bug, not a no-op.
+        print(f"[weight] montage: dropped {dropped} of {len(items)} reference "
+              f"image(s); kept {len(imgs)}", file=sys.stderr)
     if not imgs:
         raise RuntimeError("no reference images could be loaded for montage")
 
@@ -431,10 +562,11 @@ def _call_anthropic_vision(model: str, montage_url: str, prompt: str,
             )
             text = "".join(b.text for b in msg.content if b.type == "text")
             parsed = _extract_json(text)
-            if parsed is not None and "total_metal_volume_mm3" in parsed:
+            if parsed is not None and _has_valid_total(parsed):
+                _sanitize_volumes(parsed)
                 parsed["_model"] = model
                 return parsed
-            last_err = "unparseable output / missing volume"
+            last_err = "unparseable / missing or non-finite total volume"
         except Exception as e:
             last_err = str(e)[:200]
         if attempt < tries:
@@ -459,10 +591,11 @@ def _call_model(model: str, montage_url: str, prompt: str,
                            "image_url": montage_url},
             )
             parsed = _extract_json(result.get("output") or "")
-            if parsed is not None and "total_metal_volume_mm3" in parsed:
+            if parsed is not None and _has_valid_total(parsed):
+                _sanitize_volumes(parsed)
                 parsed["_model"] = model
                 return parsed
-            last_err = "unparseable output / missing volume"
+            last_err = "unparseable / missing or non-finite total volume"
         except Exception as e:
             last_err = str(e)[:200]
         if attempt < tries:
@@ -490,11 +623,11 @@ def estimate_weight(image_urls: list[str], alloy: str,
     errors: list[dict] = []
 
     def _record(res: dict) -> None:
-        if "total_metal_volume_mm3" in res:
+        if _has_valid_total(res):
             good.append(res)
         else:
             errors.append({"model": res.get("_model"),
-                           "error": res.get("_error")})
+                           "error": res.get("_error") or "invalid/non-finite volume"})
 
     # Phase 1: the primary two, in parallel (each already retries internally).
     from concurrent.futures import ThreadPoolExecutor
@@ -536,6 +669,12 @@ def estimate_weight(image_urls: list[str], alloy: str,
             out["key_dimensions_mm"] = e["key_dimensions_mm"]
     out.setdefault("stones", [])
     out.setdefault("key_dimensions_mm", {})
+
+    # Honesty pass: downgrade confidence + flag when a typed ring size produced
+    # no real calibration, or the scale clamp was hit, or no ring size at all.
+    typed_ring = us_ring_inner_diameter_mm(ring_size) > 0
+    clamped = any(e.get("_scale_clamped") for e in good)
+    _finalize_confidence(out, typed_ring, clamped)
     return out
 
 
