@@ -288,14 +288,37 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
     )
 
     # Scale calibration status — the math is anchored to the known ring size.
-    if est.get("scale_calibrated"):
-        st.caption(f"📐 Scale-calibrated to ring size US {ring_size} "
-                   f"(inner Ø {est.get('inner_diameter_mm')} mm, "
-                   f"×{est.get('scale_applied')}) — geometry anchored to the "
-                   "known size, shank volume solved from band dimensions.")
+    if est.get("uncalibrated"):
+        st.error("⚠️ **Uncalibrated weight** — a ring size was given but the "
+                 "model's geometry couldn't be anchored to it, so this weight is "
+                 "**not scale-calibrated**. Treat as low-confidence; re-run with "
+                 "clearer orthographic / additional views.")
+    elif est.get("scale_calibrated"):
+        msg = (f"📐 Scale-calibrated to ring size US {ring_size} "
+               f"(inner Ø {est.get('inner_diameter_mm')} mm, "
+               f"×{est.get('scale_applied')}) — geometry anchored to the "
+               "known size, shank volume solved from band dimensions.")
+        if est.get("scale_clamped"):
+            st.warning("⚠️ " + msg + "  NOTE: the scale had to be **clamped** — "
+                       "the model's absolute-size guess was far off, so "
+                       "dimensions may be approximate.")
+        else:
+            st.caption(msg)
     elif not str(ring_size or '').strip():
         st.warning("⚠️ No ring size — the solver can't calibrate scale, so "
                    "values may be off. Enter the ring size for accurate math.")
+
+    if est.get("confidence_reason"):
+        st.caption(f"ℹ️ Confidence note: {est['confidence_reason']}.")
+
+    # Surface any unrecognized band-construction strings (silently defaulted to
+    # solid before, which over-weighed hollow/open-back pieces).
+    _cw = [e.get("_construction_warning") for e in (est.get("_per_model") or [])
+           if e.get("_construction_warning")]
+    if _cw:
+        st.caption("⚠️ Unrecognized band construction "
+                   f"({', '.join(map(str, _cw))}) — treated as solid; verify "
+                   "solid vs hollow for an accurate shank weight.")
 
     # Dimension ↔ volume cross-check.
     _xc = _dim_volume_check(est, ring_size)
