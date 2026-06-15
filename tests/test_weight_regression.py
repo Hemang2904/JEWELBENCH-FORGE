@@ -209,5 +209,51 @@ class TestLoadImageBytes(unittest.TestCase):
         self.assertIsNone(we._load_image_bytes(None))
 
 
+class TestScaleToTarget(unittest.TestCase):
+    """Target-weight mode: pin absolute volume from a user target; dimensions
+    follow by cube-root; gemstones are independent of metal weight."""
+
+    def _est(self):
+        return {
+            "gold_weight_g": 4.0, "volume_mm3": 264.0, "total_metal_volume_mm3": 264.0,
+            "shank_volume_mm3": 180.0, "head_volume_mm3": 60.0,
+            "shank_weight_range_g": [1.5, 1.7],
+            "key_dimensions_mm": {"band_width": 2.0, "band_thickness": 1.6,
+                                  "head_height": 5.0, "head_diameter": 8.0},
+            "stones": [{"shape": "round", "count": 1, "length_mm": 6.5, "carat_each": 1.0}],
+        }
+
+    def test_weight_hits_target_exactly(self):
+        out = we.scale_to_target(self._est(), 3.0)
+        self.assertAlmostEqual(out["gold_weight_g"], 3.0, 3)
+
+    def test_volume_scales_linearly(self):
+        out = we.scale_to_target(self._est(), 2.0)  # k = 0.5
+        self.assertAlmostEqual(out["volume_mm3"], 132.0, 1)
+        self.assertAlmostEqual(out["shank_volume_mm3"], 90.0, 1)
+        self.assertAlmostEqual(out["head_volume_mm3"], 30.0, 1)
+
+    def test_linear_dims_scale_by_cuberoot(self):
+        out = we.scale_to_target(self._est(), 8.0)  # k = 2 -> dims x 2**(1/3)=1.26
+        f = 2.0 ** (1 / 3)
+        self.assertAlmostEqual(out["key_dimensions_mm"]["band_width"], round(2.0 * f, 2), 2)
+        self.assertAlmostEqual(out["key_dimensions_mm"]["head_diameter"], round(8.0 * f, 2), 2)
+
+    def test_stones_unchanged(self):
+        out = we.scale_to_target(self._est(), 1.0)  # big metal change
+        self.assertEqual(out["stones"], self._est()["stones"])  # gemstones independent
+
+    def test_noop_without_target(self):
+        out = we.scale_to_target(self._est(), 0)
+        self.assertEqual(out["target_scale"], 1.0)
+        self.assertEqual(out["gold_weight_g"], 4.0)
+
+    def test_cuberoot_dampens_weight_error(self):
+        # a +16% weight scaling moves linear dims only ~+5% (cube-root law)
+        out = we.scale_to_target(self._est(), 4.0 * 1.16)
+        shift = out["key_dimensions_mm"]["band_width"] / 2.0 - 1
+        self.assertLess(abs(shift - 0.05), 0.01)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
