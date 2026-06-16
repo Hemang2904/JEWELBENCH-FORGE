@@ -137,26 +137,33 @@ def _dim_volume_check(est: dict, ring_size: str) -> str:
             f"{shank_vol_est:,.0f} mm³ ({diff:.0%} diff) — {flag}")
 
 
+# Vision reads band THICKNESS ~16% low (catalog-measured, n=110); de-bias the
+# model value by this factor. Band width is read accurately (~8%), kept as-is.
+_BAND_T_DEBIAS = 1.19
+
+
 def _derive_band_dims(est: dict, ring_size: str):
-    """Band width/thickness — the model's values if present, otherwise solved
-    from the shank volume + ring circumference so they're CONSISTENT with the
-    weight (no invented numbers)."""
+    """Band width/thickness. Band width is the model's value (read accurately).
+    Band THICKNESS — a depth dimension vision reads ~16% low — is the model's
+    value DE-BIASED by the catalog-fitted factor (drops median error 14.7%->5.0%,
+    bias gone). When the model gives no band dims, they're solved from the shank
+    volume + ring circumference so they stay CONSISTENT with the weight."""
     kd = est.get("key_dimensions_mm") or {}
-    bw, bt = kd.get("band_width"), kd.get("band_thickness")
+    bw = float(kd["band_width"]) if kd.get("band_width") else None
+    bt = float(kd["band_thickness"]) * _BAND_T_DEBIAS if kd.get("band_thickness") else None
     inner = _us_ring_circ_mm(ring_size)
     shank_vol = est.get("shank_volume_mm3") or 0
     if bw and bt:
-        return round(float(bw), 2), round(float(bt), 2)
+        return round(bw, 2), round(bt, 2)
     if not (inner and shank_vol):
-        return (round(float(bw), 2) if bw else None,
-                round(float(bt), 2) if bt else None)
+        return (round(bw, 2) if bw else None, round(bt, 2) if bt else None)
     ratio = 1.18  # band width:thickness, fitted to the c113 catalog (was 1.3 guess)
-    bt_v = float(bt) if bt else 1.8
+    bt_v = bt if bt else 1.8
     for _ in range(8):  # iterate: area depends on thickness via centerline
         area = shank_vol / (inner + math.pi * bt_v)
-        bt_v = float(bt) if bt else (area / ratio) ** 0.5
+        bt_v = bt if bt else (area / ratio) ** 0.5
     area = shank_vol / (inner + math.pi * bt_v)
-    bw_v = float(bw) if bw else area / bt_v
+    bw_v = bw if bw else area / bt_v
     return round(bw_v, 2), round(bt_v, 2)
 
 
@@ -169,9 +176,11 @@ def _measurements(est: dict, metal: dict, dia: dict, ring_size: str) -> dict:
     kd = est.get("key_dimensions_mm") or {}
     cmm = center.get("length_mm") if center else None
     hd = kd.get("head_diameter") or (round(float(cmm) * 1.4, 1) if cmm else None)
-    # head_height fallback fitted to the c113 catalog (median head/center = 0.88,
-    # n=104); the model supplies head_height directly when it can.
-    hh = kd.get("head_height") or (round(float(cmm) * 0.88, 1) if cmm else None)
+    # Head height: PREFER the calculated value (0.88 x center-stone length, fitted
+    # to the c113 catalog, n=104) over the model's vision estimate — vision reads
+    # this depth dimension ~33% low (-30% bias); the calculation is unbiased (~13%).
+    # Fall back to the model's value only when there's no center stone to scale from.
+    hh = (round(float(cmm) * 0.88, 1) if cmm else kd.get("head_height"))
     return {
         "gold_weight_g": metal["gold_weight_g"],
         "ring_size": ring_size or "—",
