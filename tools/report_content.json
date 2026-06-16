@@ -1,0 +1,826 @@
+{
+ "testCatalog": {
+  "suite_summary": {
+   "total": 48,
+   "passed": 46,
+   "skipped": 2,
+   "failed": 0,
+   "runtime_s": 0.093
+  },
+  "classes": [
+   {
+    "name": "TestVolumeToWeight",
+    "purpose": "volume_to_weight() converts mm^3 to grams using density and casting factor, clamping negatives.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_basic",
+      "guards": "correct volume->grams math with casting factor",
+      "assertion": "1000 mm^3 at 15.6 g/cm^3 gives 15.6 g at factor 1.0 and 15.132 g at factor 0.97.",
+      "status": "ok"
+     },
+     {
+      "name": "test_negative_clamps_to_zero",
+      "guards": "negative volume yields zero weight",
+      "assertion": "volume_to_weight(-500, 15.6) returns exactly 0.0.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestValidation",
+    "purpose": "_has_valid_total/_sanitize_volumes reject NaN/inf/non-numeric volumes so bad data never reaches grams.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_has_valid_total",
+      "guards": "only positive finite numeric totals are valid",
+      "assertion": "Accepts 300 and '300'; rejects missing key, 0, -5, NaN, inf, and 'abc'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_sanitize_volumes",
+      "guards": "non-finite/non-numeric sub-volumes are zeroed while valid total survives",
+      "assertion": "After sanitize: total=300.0 kept, but inf shank, 'x' head, and NaN seat all become 0.0.",
+      "status": "ok"
+     },
+     {
+      "name": "test_inf_never_reaches_grams",
+      "guards": "an inf total is rejected rather than averaged to inf",
+      "assertion": "_has_valid_total of an inf total is False.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestDensities",
+    "purpose": "alloy_density() returns color/karat-specific densities (white/rose must not collapse to yellow) with 18k fallback.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_color_specific",
+      "guards": "each alloy maps to its own published density",
+      "assertion": "18k yellow=15.60, 18k white=14.64, 18k rose=15.18, 14k white=12.61, 14k rose=13.26.",
+      "status": "ok"
+     },
+     {
+      "name": "test_white_differs_from_yellow",
+      "guards": "white gold density is distinct from (lower than) yellow",
+      "assertion": "alloy_density('18k_white_gold') < alloy_density('18k_yellow_gold').",
+      "status": "ok"
+     },
+     {
+      "name": "test_unknown_alloy_falls_back_to_18k",
+      "guards": "unknown alloy name falls back to 18k yellow density",
+      "assertion": "alloy_density('mystery') equals 15.60.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestConstructionFill",
+    "purpose": "_construction_fill() maps band-construction labels to fill fractions and flags unrecognized/missing ones.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_known",
+      "guards": "known construction labels map to exact fill fractions",
+      "assertion": "'solid'->(0.85,None) and 'hollow'->(0.50,None).",
+      "status": "ok"
+     },
+     {
+      "name": "test_normalised_variants",
+      "guards": "spacing/casing variants normalize to the right fill",
+      "assertion": "'open back'->(0.55,None) and 'Partially Hollow'->(0.68,None).",
+      "status": "ok"
+     },
+     {
+      "name": "test_unrecognized_is_flagged",
+      "guards": "unknown construction uses default fill and is flagged",
+      "assertion": "'weird-thing' returns the default _SHANK_FILL and warn='weird-thing'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_missing_is_flagged",
+      "guards": "empty construction uses default fill and is flagged as missing",
+      "assertion": "'' returns default _SHANK_FILL and warn='(missing)'.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestRingSizeAndCalibration",
+    "purpose": "us_ring_inner_diameter_mm() and calibrate_to_ring_size() compute inner diameter and clamp scale factors.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_us7_inner_diameter",
+      "guards": "US ring size to inner-diameter mm conversion with empty handling",
+      "assertion": "Size 7 ~= 17.32 mm; '' and None both give 0.0.",
+      "status": "ok"
+     },
+     {
+      "name": "test_calibration_noop_without_inner",
+      "guards": "no model inner diameter means no scaling applied",
+      "assertion": "With no inner_diameter_mm, _scale_applied=1.0 and _scale_clamped is False.",
+      "status": "ok"
+     },
+     {
+      "name": "test_calibration_clamped_flag",
+      "guards": "extreme implied scale is clamped to the cap",
+      "assertion": "inner_diameter_mm=2.0 vs size 7 sets _scale_clamped True and _scale_applied=_SCALE_MAX.",
+      "status": "ok"
+     },
+     {
+      "name": "test_calibration_within_band_not_clamped",
+      "guards": "modest scale within band is not clamped",
+      "assertion": "inner_diameter_mm at 1.1x known leaves _scale_clamped False.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestRefineShankConstructionWarning",
+    "purpose": "refine_shank_volume() records a construction warning only for unrecognized band_construction.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_unrecognized_construction_recorded",
+      "guards": "unknown band_construction surfaces a warning on the estimate",
+      "assertion": "band_construction='weird' sets est['_construction_warning']='weird'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_known_construction_no_warning",
+      "guards": "known band_construction produces no warning",
+      "assertion": "band_construction='hollow' leaves _construction_warning None.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestReconcile",
+    "purpose": "reconcile() aggregates multi-model volumes to weight/confidence; gained 2 new tests (test_single_model_capped_at_medium and test_two_models_still_mean) covering single-model capping and n=2 mean backward-compat.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_mean_weight",
+      "guards": "two-model mean volume converts to correct grams",
+      "assertion": "Volumes 320/360 give volume_mm3=340.0 and gold_weight_g~=5.145.",
+      "status": "ok"
+     },
+     {
+      "name": "test_confidence_medium_on_moderate_disagreement",
+      "guards": "moderate model disagreement yields medium confidence",
+      "assertion": "320 vs 360 (~11.8% spread) gives confidence 'medium'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_confidence_low_on_high_disagreement",
+      "guards": "large model disagreement yields low confidence",
+      "assertion": "300 vs 420 (~33% spread) gives confidence 'low'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_single_model_capped_at_medium",
+      "guards": "a lone model flags single_model and caps confidence at medium",
+      "assertion": "One model sets single_model True and confidence 'medium'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_two_models_still_mean",
+      "guards": "at n=2 aggregation stays plain mean with no outlier rejection",
+      "assertion": "320/360 gives aggregation 'mean', volume_mm3=340.0, outliers_rejected=0.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestRobustAggregation",
+    "purpose": "NEW: median + outlier rejection (_robust_kept/_robust_point and reconcile) so one wrong model cannot drag the weight.",
+    "is_new": true,
+    "tests": [
+     {
+      "name": "test_robust_point_median_at_n3",
+      "guards": "at n>=3 the point estimate is the median not the mean",
+      "assertion": "_robust_point([300,340,360]) returns 340 (median), not the 333.3 mean.",
+      "status": "ok"
+     },
+     {
+      "name": "test_robust_point_mean_below_n3",
+      "guards": "below n=3 the point estimate falls back to the mean",
+      "assertion": "_robust_point([300,360]) returns 330 (mean).",
+      "status": "ok"
+     },
+     {
+      "name": "test_high_outlier_rejected",
+      "guards": "a value far above the median is dropped from the kept set",
+      "assertion": "_robust_kept([330,340,350,1000]) excludes 1000 and _robust_point of it is 340.",
+      "status": "ok"
+     },
+     {
+      "name": "test_low_outlier_rejected",
+      "guards": "a value far below the median (half-volume hallucination) is dropped",
+      "assertion": "_robust_kept([340,350,360,100]) excludes 100.",
+      "status": "ok"
+     },
+     {
+      "name": "test_reconcile_reports_outlier_and_aggregation",
+      "guards": "reconcile exposes aggregation mode, outlier count, n_models, and outlier-free volume",
+      "assertion": "Inputs 330/340/350/1000 give aggregation 'median+outlier-reject', outliers_rejected=1, n_models=4, volume_mm3=340.0.",
+      "status": "ok"
+     },
+     {
+      "name": "test_rejected_outlier_does_not_tank_confidence",
+      "guards": "disagreement/confidence are measured on the surviving set, not the outlier",
+      "assertion": "335/340/345/1200 still gives confidence 'high' with model_disagreement < 0.10.",
+      "status": "ok"
+     },
+     {
+      "name": "test_no_false_rejection_when_all_agree",
+      "guards": "tightly agreeing models trigger no rejection",
+      "assertion": "330/340/350 gives outliers_rejected=0 and volume_mm3=340.0.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestFinalizeConfidence",
+    "purpose": "_finalize_confidence() forces low confidence when an estimate is uncalibrated, lacks ring size, or is scale-clamped.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_calibrated_stays_confident",
+      "guards": "a properly calibrated estimate keeps its high confidence",
+      "assertion": "scale_calibrated True with typed ring keeps confidence 'high' and uncalibrated False.",
+      "status": "ok"
+     },
+     {
+      "name": "test_typed_ring_but_uncalibrated_forced_low",
+      "guards": "typed ring size that fails to anchor scale is forced low",
+      "assertion": "Uncalibrated with typed ring sets confidence 'low', uncalibrated True, reason mentions 'could not be scale-anchored'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_no_ring_size_forced_low",
+      "guards": "absence of any ring size forces low confidence",
+      "assertion": "Uncalibrated with no typed ring sets confidence 'low' and reason mentions 'no ring size'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_clamped_forced_low",
+      "guards": "a clamped scale forces low confidence",
+      "assertion": "clamped=True sets confidence 'low' and scale_clamped True.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestLoadImageBytes",
+    "purpose": "_load_image_bytes() loads images from raw bytes, data URLs, and local paths, returning None on garbage.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_bytes_passthrough",
+      "guards": "raw bytes/bytearray pass through unchanged",
+      "assertion": "b'abc' returns b'abc' and bytearray(b'xyz') returns b'xyz'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_data_url",
+      "guards": "base64 data URLs are decoded to bytes",
+      "assertion": "'data:image/png;base64,YWJj' decodes to b'abc'.",
+      "status": "ok"
+     },
+     {
+      "name": "test_local_path",
+      "guards": "an existing local file path is read as bytes",
+      "assertion": "A temp .png containing b'\\x89PNGdata' is read back as those exact bytes.",
+      "status": "ok"
+     },
+     {
+      "name": "test_garbage_returns_none",
+      "guards": "invalid inputs return None",
+      "assertion": "Integer 123, a nonexistent path, and None all return None.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestScaleToTarget",
+    "purpose": "scale_to_target() pins absolute volume to a user weight target, scaling dims by cube-root while leaving stones independent.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_weight_hits_target_exactly",
+      "guards": "scaled weight exactly matches the requested target",
+      "assertion": "Targeting 3.0 g yields gold_weight_g 3.0.",
+      "status": "ok"
+     },
+     {
+      "name": "test_volume_scales_linearly",
+      "guards": "volumes scale linearly with the weight target",
+      "assertion": "Target 2.0 g (k=0.5) gives volume 132.0, shank 90.0, head 30.0.",
+      "status": "ok"
+     },
+     {
+      "name": "test_linear_dims_scale_by_cuberoot",
+      "guards": "linear dimensions scale by the cube root of the volume factor",
+      "assertion": "Target 8.0 g (k=2) multiplies band_width and head_diameter by 2**(1/3).",
+      "status": "ok"
+     },
+     {
+      "name": "test_stones_unchanged",
+      "guards": "gemstones are independent of metal weight changes",
+      "assertion": "After a large metal change the stones list equals the original.",
+      "status": "ok"
+     },
+     {
+      "name": "test_noop_without_target",
+      "guards": "a zero/absent target leaves the estimate untouched",
+      "assertion": "Target 0 gives target_scale 1.0 and gold_weight_g unchanged at 4.0.",
+      "status": "ok"
+     },
+     {
+      "name": "test_cuberoot_dampens_weight_error",
+      "guards": "cube-root law dampens weight error in linear dims",
+      "assertion": "A +16% weight scaling shifts band_width only ~+5%.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestDimensionAnnotation",
+    "purpose": "views3d annotate_view/_overall_height_mm draw crisp code-rendered dimension labels and compute overall height from ring size.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_annotate_draws_crisp_labels",
+      "guards": "annotation preserves canvas and draws crisp dark text/lines",
+      "assertion": "Annotated 480x480 image keeps its size and has >150 dark pixels.",
+      "status": "ok"
+     },
+     {
+      "name": "test_overall_height_from_ring_size",
+      "guards": "overall height is derived from ring inner diameter plus band and head",
+      "assertion": "_overall_height_mm for size 7 / band 1.55 / head 7.35 lands between 27 and 29 mm.",
+      "status": "ok"
+     }
+    ]
+   },
+   {
+    "name": "TestCalculatedDepth",
+    "purpose": "forge_bom prefers calculated depth dims (de-biased band thickness, head height from center stone) over vision guesses; skipped when streamlit is unavailable.",
+    "is_new": false,
+    "tests": [
+     {
+      "name": "test_band_thickness_debiased_width_kept",
+      "guards": "band width preserved while band thickness is de-biased",
+      "assertion": "Width stays 2.0 while thickness becomes round(1.5*1.19,2).",
+      "status": "skip"
+     },
+     {
+      "name": "test_head_height_calculated_from_center_stone",
+      "guards": "head height is computed from center stone size, not the vision value",
+      "assertion": "head_height becomes round(8.0*0.88,1)=7.0, not the model's 4.0.",
+      "status": "skip"
+     }
+    ]
+   }
+  ]
+ },
+ "evidence": {
+  "contamination": {
+   "x_multiplier": [
+    1,
+    1.25,
+    1.5,
+    1.75,
+    2,
+    2.5,
+    3
+   ],
+   "mean_err_pct": [
+    0,
+    6.25,
+    12.5,
+    18.75,
+    25,
+    37.5,
+    50
+   ],
+   "robust_err_pct": [
+    0,
+    1.47,
+    1.47,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "nsweep": [
+   {
+    "n": 1,
+    "aggregation": "single",
+    "inputs": "[330.0]",
+    "result_vol": 330,
+    "conf": "medium"
+   },
+   {
+    "n": 2,
+    "aggregation": "mean",
+    "inputs": "[330.0, 340.0]",
+    "result_vol": 335,
+    "conf": "high"
+   },
+   {
+    "n": 3,
+    "aggregation": "median+outlier-reject",
+    "inputs": "[330.0, 340.0, 350.0]",
+    "result_vol": 340,
+    "conf": "high"
+   },
+   {
+    "n": 4,
+    "aggregation": "median+outlier-reject",
+    "inputs": "[330.0, 340.0, 350.0, 900.0]",
+    "result_vol": 340,
+    "conf": "high"
+   },
+   {
+    "n": 5,
+    "aggregation": "median+outlier-reject",
+    "inputs": "[330.0, 340.0, 350.0, 335.0, 900.0]",
+    "result_vol": 337.5,
+    "conf": "high"
+   },
+   {
+    "n": 6,
+    "aggregation": "median+outlier-reject",
+    "inputs": "[330.0, 340.0, 350.0, 335.0, 345.0, 900.0]",
+    "result_vol": 340,
+    "conf": "high"
+   }
+  ],
+  "demonstrations": [
+   {
+    "name": "A. Headline case [332,340,351,720] @ 18k_yellow_gold",
+    "description": "Four per-model volumes where m3 hallucinates a ~2x volume (720 vs a true cluster near 340). OLD = plain mean of ALL four volumes -> volume_to_weight, with confidence judged on the all-points spread. NEW = reconcile() robust point (median of the 50%-of-median kept set). All numbers from we.reconcile() and we._robust_point().",
+    "table_headers": [
+     "metric",
+     "OLD (plain mean)",
+     "NEW (robust)"
+    ],
+    "table_rows": [
+     [
+      "volume_mm3",
+      "435.8",
+      "340.0"
+     ],
+     [
+      "gold_weight_g",
+      "6.594",
+      "5.145"
+     ],
+     [
+      "confidence",
+      "low",
+      "high"
+     ],
+     [
+      "outliers_rejected",
+      "0",
+      "1"
+     ],
+     [
+      "model_disagreement",
+      "0.89",
+      "0.056"
+     ],
+     [
+      "kept set",
+      "[332,340,351,720] (all)",
+      "[332.0, 340.0, 351.0]"
+     ]
+    ],
+    "takeaway": "The single 720 outlier dragged the OLD mean +28% high (435.8 vs 340 mm3; 6.594 g vs 5.145 g) and tanked OLD confidence to 'low' via an 0.89 full-spread. NEW reconcile drops 720, returns the exact-truth 340.0 mm3 / 5.145 g and keeps 'high' confidence (disagreement 0.056 measured only on the kept trio)."
+   },
+   {
+    "name": "B. Low (half-volume) outlier [340,350,360,100]",
+    "description": "m3 hallucinates a HALF volume (100). reconcile() must drop the low dissenter too, not just high ones. _robust_kept confirms 100 is removed; robust point is the median of the surviving trio [340,350,360]=350. OLD mean averages all four. From we.reconcile() and we._robust_kept().",
+    "table_headers": [
+     "metric",
+     "OLD (plain mean)",
+     "NEW (robust)"
+    ],
+    "table_rows": [
+     [
+      "volume_mm3",
+      "287.5",
+      "350.0"
+     ],
+     [
+      "gold_weight_g",
+      "4.35",
+      "5.296"
+     ],
+     [
+      "100 dropped?",
+      "no (kept)",
+      "yes (rejected)"
+     ],
+     [
+      "kept set",
+      "[340,350,360,100] (all)",
+      "[340.0, 350.0, 360.0]"
+     ],
+     [
+      "outliers_rejected",
+      "0",
+      "1"
+     ],
+     [
+      "confidence",
+      "low",
+      "high"
+     ]
+    ],
+    "takeaway": "The low 100 hallucination pulled the OLD mean -15.4% LOW (287.5 mm3 / 4.35 g) below the true cluster. NEW _robust_kept removes 100 (median band of all-set median 345 is 172.5..517.5), median of survivors = 350.0 mm3 / 5.296 g, outliers_rejected=1, confidence 'high'. Outlier rejection is symmetric: half-volume and double-volume hallucinations are both dropped."
+   },
+   {
+    "name": "C. Confidence not tanked by a rejected outlier [335,340,345,1200]",
+    "description": "Three models agree tightly (335/340/345) and one is wildly wrong (1200, ~3.5x). model_disagreement is measured on the KEPT set only, so a rejected outlier cannot collapse confidence. OLD full-spread formula would compute (max-min)/point over all points = 'low'. From we.reconcile().",
+    "table_headers": [
+     "metric",
+     "OLD (full-spread)",
+     "NEW (kept-set)"
+    ],
+    "table_rows": [
+     [
+      "volume_mm3",
+      "555.0",
+      "340.0"
+     ],
+     [
+      "model_disagreement",
+      "1.559",
+      "0.029"
+     ],
+     [
+      "confidence",
+      "low",
+      "high"
+     ],
+     [
+      "gold_weight_g",
+      "8.398",
+      "5.145"
+     ],
+     [
+      "kept set",
+      "[335,340,345,1200] (all)",
+      "[335.0, 340.0, 345.0]"
+     ],
+     [
+      "outliers_rejected",
+      "0",
+      "1"
+     ]
+    ],
+    "takeaway": "OLD full-spread disagreement = (1200-335)/555 = 1.559 -> 'low' confidence despite three models agreeing within 3%. NEW measures disagreement on the surviving trio: (345-335)/340 = 0.029 (<0.10) -> 'high', and the point is the exact-truth 340.0 mm3 / 5.145 g. A single wild model no longer poisons either the weight or the confidence."
+   },
+   {
+    "name": "D. Dimensions sourced from the median-closest model (volumes from A)",
+    "description": "estimate_weight() takes key_dimensions_mm/stones from the model whose total volume is CLOSEST to the reconciled (robust) volume, NOT first-wins. Reconciled volume from case A = 340.0. Distances of each model's volume to 340.0 computed, model picked by min distance. Replicates the by_closeness sort in estimate_weight().",
+    "table_headers": [
+     "model",
+     "total_volume_mm3",
+     "abs distance to reconciled 340.0",
+     "supplies dims?"
+    ],
+    "table_rows": [
+     [
+      "m0",
+      "332",
+      "8.0",
+      "OLD first-wins picks this"
+     ],
+     [
+      "m1",
+      "340",
+      "0.0",
+      "NEW closest-to-reconciled picks this"
+     ],
+     [
+      "m2",
+      "351",
+      "11.0",
+      "no"
+     ],
+     [
+      "m3 (outlier)",
+      "720",
+      "380.0",
+      "no (never, even old-first if reordered)"
+     ]
+    ],
+    "takeaway": "Reconciled volume is 340.0, so the new closest-to-reconciled rule selects m1 (distance 0.0) for key_dimensions_mm. The OLD first-wins rule would have taken m0 (vol 332, distance 8.0) purely by list order. Crucially the rejected outlier m3 (distance 380.0) can never supply geometry under the new rule, so dimensions stay consistent with the weight even when a model is dropped from the average."
+   }
+  ]
+ },
+ "codeChanges": {
+  "changes": [
+   {
+    "title": "Robust central estimate (median + outlier rejection) replaces the plain mean in reconcile()",
+    "location": "weight_estimator.py:273-294 (_robust_kept / _robust_point helpers) and reconcile() at weight_estimator.py:321-345",
+    "detail": "_robust_kept(xs) (line 273) filters to positive numbers, then at n>=3 drops any value outside med*(1\u00b1ROBUST_OUTLIER_TOL) of the median (default 0.5 => 50% band), falling back to all xs if that would empty the set; at n<3 it keeps everything. _robust_point(xs) (line 288) returns statistics.median of the kept set when len(kept)>=3, else the mean. reconcile() calls total_point=_robust_point(total_v) and shank_point=_robust_point(shank_v) (lines 321-322) for the headline volume/weight instead of averaging. n_outliers = n_models - len(_robust_kept(total_v)) (lines 324-325). Verified by running: reconcile of [300,330,1000] yields volume_mm3=315.0 with outliers_rejected=1 (the 1000 dropped); kept=[300,330]."
+   },
+   {
+    "title": "estimate_weight() targets >=3 good estimates with retries and a fallback pool",
+    "location": "estimate_weight() in weight_estimator.py:671-715 (target at line 702; phases at 704-715)",
+    "detail": "Pool = [WEIGHT_MODEL_PRIMARY, WEIGHT_MODEL_SECONDARY] + WEIGHT_FALLBACK_MODELS, de-duplicated in order (lines 680-686). target = max(2, min(WEIGHT_MIN_MODELS, len(ordered))) (line 702), so it aims for 3 good estimates but never more than there are candidates. Phase 1 (lines 704-709) runs the first `target` candidates in parallel via ThreadPoolExecutor; Phase 2 (lines 712-715) walks remaining fallbacks one at a time until len(good) >= target. Each _call_model retries internally WEIGHT_CALL_RETRIES (=3) times with 0.6*attempt backoff (lines 642-668)."
+   },
+   {
+    "title": "Dims/stones taken from the model whose total volume is closest to the reconciled volume",
+    "location": "estimate_weight() in weight_estimator.py:736-748 (by_closeness sort at 740-741)",
+    "detail": "ref_vol = out['volume_mm3'] (the reconciled median, line 739). good models are sorted by abs(total_metal_volume_mm3 - ref_vol) (lines 740-741), then the first model that has 'stones' / 'key_dimensions_mm' supplies them (lines 742-746), with stones/key_dimensions_mm defaulting to []/{}. This ensures a rejected outlier never supplies the geometry even though it was excluded from the weight."
+   },
+   {
+    "title": "New reconcile() output fields surfacing the aggregation method and disagreement",
+    "location": "reconcile() return dict in weight_estimator.py:357-374 (aggregation computed at 326-327, disagreement at 343-345)",
+    "detail": "aggregation = 'median+outlier-reject' if n_models>=3 else 'mean' if n_models==2 else 'single' (lines 326-327). The return dict now exposes n_models (line 367), aggregation (369), outliers_rejected (370), model_disagreement (371), plus confidence (372). model_disagreement is (max(kept)-min(kept))/total_point measured on the KEPT set only (lines 343-345) so a rejected outlier doesn't tank confidence. Confidence is medium for a single model, else low/medium/high by disagreement thresholds 0.25/0.10 (lines 348-355). Verified: n=3 with one outlier gave aggregation='median+outlier-reject', outliers_rejected=1, model_disagreement=0.095."
+   },
+   {
+    "title": "UI 'combined by ...' caption in forge_bom.py",
+    "location": "forge_bom.py:342-359 (caption render)",
+    "detail": "Reads est['aggregation'], est['n_models'], est['outliers_rejected']. For 'median+outlier-reject' it renders 'median of N models' plus ', K outlier(s) dropped' when K>0 (lines 346-348); for 'mean' it renders 'mean of 2 models' (line 350); otherwise 'single model' (line 352). This _combine string is shown via st.caption as 'combined by {_combine}' alongside shank range, density, casting factor and model list (lines 353-359). Confidence and '\u0394 models {model_disagreement:.0%}' are also shown in a metric at lines 332-333."
+   }
+  ],
+  "knobs": [
+   {
+    "name": "WEIGHT_MIN_MODELS",
+    "default": "3",
+    "purpose": "Target number of good independent estimates the ensemble aims for so median+outlier rejection has enough votes to bite; code default int('3') at weight_estimator.py:64 (not overridden in .env)."
+   },
+   {
+    "name": "ROBUST_OUTLIER_TOL",
+    "default": "0.5",
+    "purpose": "Max fractional distance (50%) a value may sit from the median before it is dropped as an outlier from the central estimate (n>=3 only); code default float('0.5') at weight_estimator.py:270 (not overridden in .env)."
+   },
+   {
+    "name": "WEIGHT_CALL_RETRIES",
+    "default": "3",
+    "purpose": "Per-model retry count for each vision call with backoff before it is recorded as an error; code default int('3') at weight_estimator.py:59 (not overridden in .env)."
+   },
+   {
+    "name": "WEIGHT_FALLBACK_MODELS",
+    "default": "google/gemini-2.5-flash,openai/gpt-5",
+    "purpose": "Extra models tried in order (after the primary two) until WEIGHT_MIN_MODELS good estimates are reached; code default at weight_estimator.py:54-58. NOTE: .env line 20 overrides with the same value 'google/gemini-2.5-flash,openai/gpt-5'."
+   }
+  ],
+  "degradation": [
+   {
+    "n_models": "1",
+    "method": "single",
+    "behavior": "aggregation='single'; _robust_point returns the single value (mean of one); no outlier rejection (outliers_rejected=0); single_model=True so confidence is capped at 'medium' (never cross-checked). Verified: reconcile of [300] -> volume_mm3=300.0, confidence='medium'."
+   },
+   {
+    "n_models": "2",
+    "method": "mean",
+    "behavior": "aggregation='mean'; _robust_point returns the arithmetic mean (at n<3 kept=all and median==mean anyway), so one wrong model still drags the answer half-way; outliers_rejected=0; confidence by disagreement thresholds. Verified: reconcile of [300,360] -> volume_mm3=330.0."
+   },
+   {
+    "n_models": "3 (>=3)",
+    "method": "median+outlier-reject",
+    "behavior": "aggregation='median+outlier-reject'; values >ROBUST_OUTLIER_TOL (50%) from the median are dropped (kept to all if that empties the set), then the headline is the median of the kept set; outliers_rejected = n_models - len(kept); disagreement measured on kept set only. Verified clean [300,330,360] -> 330.0 (0 outliers); [300,330,1000] -> 315.0, outliers_rejected=1, disagreement=0.095."
+   }
+  ]
+ },
+ "narrative": {
+  "problem": "The weight estimator runs an ensemble of vision models that each return a ring's metal volume in mm^3, then reconcile() combines those volumes into one gold-weight number. Two coupled failure modes motivated this change. First, ensemble collapse: in practice the run frequently degenerated to \"1 model returned, 2 failed\" because the prior pool only attempted the two primary models with no targeted backfill, so a single flaky provider left a one-vote ensemble that cannot be cross-checked. Second, plain-mean fragility: reconcile() previously took the arithmetic mean of whatever volumes survived, and the mean has a breakdown point of 0 \u2014 a single bad estimate moves the answer without bound. Measured on a synthetic four-model set [330, 340, 350, 1000] (one model hallucinating a roughly 3x volume), the plain mean lands at 505 mm^3 versus a true cluster around 340; carried to grams on 18k_yellow_gold that one wild reading inflates the result from 5.145 g to 7.64 g. Because the volume feeds pricing, an averaged-in outlier directly distorts the quoted gold weight.",
+  "statistical_rationale": "reconcile() now computes a robust central estimate instead of a mean. At n>=3 it takes the median of the estimates and, before that, drops any value more than ROBUST_OUTLIER_TOL (default 0.5, i.e. 50%) away from the median (_robust_kept), then medians the survivors (_robust_point). The median is the right primitive here because its breakdown point is ~50% \u2014 up to (just under) half the models can be arbitrarily wrong and the central estimate stays bounded \u2014 whereas the mean's breakdown point is 0, so one bad model corrupts it. The explicit 50% band on top of the median is belt-and-suspenders: it removes a gross outlier from the kept set entirely so it cannot even contribute to spread/disagreement, while the median already protects the point value. This only bites at n>=3, and that threshold is principled rather than arbitrary: for n<=2 the median is mathematically equal to the mean (verified: median([300,360]) == 330 == their mean), so there is no robust gain to be had and the code deliberately keeps everything and falls back to the mean (n=2) or the single value (n=1). The need for three votes is exactly why estimate_weight() was changed to target WEIGHT_MIN_MODELS=3 good estimates, retrying each model up to 3 times and walking a fallback pool (gemini-2.5-flash, gpt-5) until three independent estimates land. Finally, model_disagreement is measured on the surviving (kept) set, not the raw set: a correctly-rejected outlier should not be allowed to tank confidence when the models that remain actually agree. Measured on [335, 340, 345, 1200]: the 1200 is rejected, the reconciled volume is 340.0, disagreement is 0.029, and confidence is reported \"high\" \u2014 the wild reading neither moved the weight nor degraded the confidence label.",
+  "exec_summary": "reconcile() now derives its central volume from a robust estimator instead of a plain arithmetic mean: at three or more models it drops any estimate more than 50% from the median and medians the survivors, while degrading to the mean at n=2 and the single value at n=1. It also surfaces the mechanism in the output (aggregation, outliers_rejected, model_disagreement, confidence), and estimate_weight() now actively targets three good estimates via retries and a fallback model pool so the robust path has enough votes to engage. The measured effect on a synthetic four-model set with one ~3x outlier [330, 340, 350, 1000] is that the reconciled volume holds at 340 mm^3 instead of the mean's 505 mm^3, which in grams is 5.145 g versus 7.64 g on 18k yellow gold. All 12 tests in the targeted classes pass, and the full regression suite is green at 48 passed / 2 skipped (skips are environment-dependent, not failures).",
+  "when_it_helps": "It helps whenever the ensemble has three or more good estimates and at least one is grossly wrong but a majority cluster around the truth. Concretely: a model that hallucinates a doubled volume \u2014 verified [330, 340, 350, 1000] reconciles to 340 mm^3 with one outlier rejected \u2014 or a half-volume reading \u2014 [340, 350, 360, 100] reconciles to 350 mm^3, the 100 dropped \u2014 no longer drags the gold weight. It also helps confidence reporting: because disagreement is computed on the kept set, three models agreeing tightly plus one wild dissenter still reports high confidence (measured disagreement 0.029 on [335, 340, 345, 1200]) instead of being falsely flagged as a low-confidence disagreement. The companion change to estimate_weight() helps the common operational case where one provider is flaky: retries plus the fallback pool push the ensemble toward three votes so the robust path can actually engage rather than collapsing to a single uncheckable estimate.",
+  "when_it_does_not": "It does nothing at n<3, which is the regime the original \"1 model returned, 2 failed\" incident actually lived in: at n=1 the result is the single value, and at n=2 the aggregation is still the mean, so a single bad model continues to drag the answer \u2014 verified, [340, 1000] reconciles to 670, the outlier not rejected. The robustness therefore depends on fal/the providers actually returning three usable estimates; if the fallbacks also fail, the median's protection never engages. It does not correct a systematic bias shared by all models: if every model is, say, uniformly 15% high, the median of agreeing-but-wrong estimates is just as wrong as their mean would be \u2014 outlier rejection only handles disagreement, not shared error. The 50% tolerance (ROBUST_OUTLIER_TOL) is a hand-chosen heuristic, not a value fit from the ground-truth dataset, so it can in principle keep a 40%-off estimate or, in a genuinely high-variance-but-correct case, behave conservatively. And it does not improve the per-model volume readings themselves \u2014 it only changes how multiple readings are combined.",
+  "limitations": [
+   "No robustness below three models: n=1 returns the single value and n=2 uses the mean, because the median equals the mean at n<=2 (verified median([300,360]) == 330); a single bad model still drags the n=2 result (verified [340,1000] -> 670).",
+   "Effectiveness is contingent on the ensemble reaching three good estimates; if retries and the gemini-2.5-flash / gpt-5 fallbacks also fail, the robust path never engages and the system degrades to mean/single.",
+   "Systematic, model-correlated bias is not corrected \u2014 if all models share the same error, the median is wrong by the same amount as the mean would be. Outlier rejection only addresses disagreement, not shared bias.",
+   "ROBUST_OUTLIER_TOL = 0.5 (50%) is a heuristic threshold, env-overridable but not fit from the 113-design ground-truth dataset; it has not been calibrated to that data, so the chosen cut point is a judgment call.",
+   "The kept-set rule has an edge case by design: if every value is rejected, _robust_kept returns the original set (the `or xs` fallback), so a pathological all-disagree input is not left empty but is also not truly filtered.",
+   "Reported numbers here come from synthetic estimate dicts (e.g. [330,340,350,1000]) chosen to exercise the math, not from live VLM output; live accuracy against true CAD weights is covered by the separate eval harness, not these deterministic unit tests.",
+   "dims/stones are taken from the model whose total volume is closest to the reconciled volume; this is a reasonable proxy but means geometry is sourced from one member rather than reconciled component-by-component, so a model close in total volume but off in proportions could still supply the printed dimensions.",
+   "The change combines volume estimates only; downstream scale calibration, casting factor, and density assumptions are unchanged and remain independent sources of weight error."
+  ]
+ },
+ "vEvidence": {
+  "verdicts": [
+   {
+    "claim": "A. Headline [332,340,351,720] @ 18k_yellow_gold NEW robust volume_mm3 = 340.0",
+    "recomputed": "reconcile()['volume_mm3'] = 340.0; _robust_point([332,340,351,720]) = 340; kept set = [332,340,351]",
+    "matches": true,
+    "note": "Exact. 720 is >50% above median 340 (band 170..510), dropped; median of survivors = 340.0."
+   },
+   {
+    "claim": "A. Headline NEW gold_weight_g = 5.145",
+    "recomputed": "reconcile()['gold_weight_g'] = 5.145 (volume_to_weight(340, density 15.6, casting 0.97) = 340/1000*15.6*0.97 = 5.14488 -> 5.145)",
+    "matches": true,
+    "note": "18k_yellow_gold density=15.6, casting=0.97 confirmed from source defaults."
+   },
+   {
+    "claim": "A. Headline NEW confidence = high, outliers_rejected = 1, model_disagreement = 0.056",
+    "recomputed": "confidence='high', outliers_rejected=1, model_disagreement=0.056 ((351-332)/340=0.0559->0.056)",
+    "matches": true,
+    "note": "Disagreement measured on kept trio only; <0.10 -> high."
+   },
+   {
+    "claim": "A. Headline OLD plain-mean grams = 6.594 (volume 435.8)",
+    "recomputed": "mean([332,340,351,720])=435.75->435.8; volume_to_weight(435.75,15.6)=6.594",
+    "matches": true,
+    "note": "OLD mean volume 435.8 mm3, 6.594 g confirmed; +28% high vs truth."
+   },
+   {
+    "claim": "B. Low outlier [340,350,360,100] NEW drops 100, volume=350.0, gold=5.296, outliers_rejected=1, confidence=high; OLD mean vol 287.5 / 4.35 g",
+    "recomputed": "reconcile(): volume_mm3=350.0, gold_weight_g=5.296, outliers_rejected=1, confidence='high', kept=[340,350,360]; OLD mean=287.5 mm3, volume_to_weight=4.35 g",
+    "matches": true,
+    "note": "median of all4=345; 100 is below band 172.5..517.5 so rejected; surviving trio median=350. All values exact."
+   },
+   {
+    "claim": "C. [335,340,345,1200] NEW confidence=high, model_disagreement=0.029, volume=340.0, gold=5.145; OLD full-spread disagreement=1.559",
+    "recomputed": "reconcile(): confidence='high', model_disagreement=0.029 ((345-335)/340), volume_mm3=340.0, gold_weight_g=5.145, outliers_rejected=1; OLD full-spread (1200-335)/555=1.559, OLD grams 8.398",
+    "matches": true,
+    "note": "1200 rejected (>50% from median 340); disagreement on kept trio only = 0.029 -> high. OLD figures also confirmed."
+   },
+   {
+    "claim": "Contamination sweep mean_err_pct = [0,6.25,12.5,18.75,25,37.5,50]",
+    "recomputed": "With reconstructed base [330,340,350], truth=340, contaminant=340*x: mean_err_pct = [0.0,6.25,12.5,18.75,25.0,37.5,50.0]",
+    "matches": true,
+    "note": "Exact match for all 7 multipliers; mean error grows linearly with contaminant size."
+   },
+   {
+    "claim": "Contamination sweep robust_err_pct = [0,1.47,1.47,0,0,0,0]",
+    "recomputed": "Same base: robust_err_pct = [0.0,1.47,1.47,0.0,0.0,0.0,0.0]",
+    "matches": true,
+    "note": "At x=1.25/1.5 contaminant is kept (within 50% of median) making 4 kept values -> median=mean of middle two=345 (1.47% high); at x>=1.75 it is rejected and point returns to exact 340. Exact match."
+   },
+   {
+    "claim": "N-sweep aggregation labels and result_vol/conf for n=1..6",
+    "recomputed": "n=1 single/330.0/medium; n=2 mean/335.0/high; n=3 median+outlier-reject/340.0/high; n=4 .../340.0/high; n=5 .../337.5/high; n=6 .../340.0/high",
+    "matches": true,
+    "note": "All six rows reproduced exactly: aggregation, result_vol, and confidence."
+   },
+   {
+    "claim": "D. Dims sourced from median-closest model: reconciled 340.0 -> m1 (dist 0.0) supplies dims; m3 outlier dist 380.0 never supplies",
+    "recomputed": "ref_vol = out['volume_mm3'] (340.0); distances m0=8.0, m1=0.0, m2=11.0, m3=380.0; min is m1. Code at weight_estimator.py:739-746 sorts good models by abs(total_vol-ref_vol) (by_closeness) and takes key_dimensions_mm/stones from first match.",
+    "matches": true,
+    "note": "Distances and the closest-to-reconciled selection rule confirmed in source; m1 picked, outlier m3 last."
+   },
+   {
+    "claim": "Config: WEIGHT_MIN_MODELS=3, retries=3, fallback pool gemini-2.5-flash + gpt-5",
+    "recomputed": "WEIGHT_MIN_MODELS=3, WEIGHT_CALL_RETRIES=3, WEIGHT_FALLBACK_MODELS=['google/gemini-2.5-flash','openai/gpt-5']",
+    "matches": true,
+    "note": "Matches feature spec; ROBUST_OUTLIER_TOL default=0.5 confirmed."
+   }
+  ],
+  "all_pass": true,
+  "summary": "Independently reproduced every numeric claim by running weight_estimator.reconcile/_robust_point/_robust_kept under system python3 (stdlib only) at /Users/hemang/dev/JEWELBENCH-FORGE/weight_estimator.py. All 10 verdicts match.\n\nHeadline case A [332,340,351,720] @ 18k_yellow_gold: robust volume=340.0 mm3, gold=5.145 g, confidence=high, outliers_rejected=1, model_disagreement=0.056; OLD plain mean=435.8 mm3 / 6.594 g. All exact (density 15.6, casting 0.97 verified from source).\n\nCase B low outlier [340,350,360,100]: 100 rejected, volume=350.0, gold=5.296, confidence=high; OLD mean 287.5/4.35. Exact.\n\nCase C [335,340,345,1200]: 1200 rejected, disagreement on kept trio=0.029 -> confidence=high, volume=340.0; OLD full-spread disagreement=1.559. Exact.\n\nContamination sweep: mean_err_pct=[0,6.25,12.5,18.75,25,37.5,50] and robust_err_pct=[0,1.47,1.47,0,0,0,0] both reproduced exactly using the reconstructed base cluster [330,340,350] (truth=340, contaminant=340*x). The 1.47% at x=1.25/1.5 arises because a near contaminant is kept (4 kept -> median=mean of middle two=345); beyond 50% it is rejected and the point returns to exact truth.\n\nN-sweep (n=1..6): all aggregation labels, result_vols, and confidences match. Case D dim-sourcing: confirmed in source (weight_estimator.py:739-746) that key_dimensions_mm/stones come from the model closest to the reconciled volume (m1, dist 0.0), and the rejected outlier m3 (dist 380.0) can never supply geometry.\n\nCorroboration: full test suite tests/test_weight_regression.py passes (48 run, 2 skipped, 0 failures), including TestRobustAggregation and the two new TestReconcile cases. No discrepancies found."
+ },
+ "vCatalog": {
+  "suite_runs_clean": true,
+  "counts_match": true,
+  "discrepancies": [],
+  "note": "Verified against /Users/hemang/dev/JEWELBENCH-FORGE/tests/test_weight_regression.py and weight_estimator.py using system python3 (3.9.6, /Library/Developer/CommandLineTools/usr/bin/python3 \u2014 no venv). Ran `python3 -m unittest tests.test_weight_regression -v`: 48 tests, 2 skipped (TestCalculatedDepth.test_band_thickness_debiased_width_kept and test_head_height_calculated_from_center_stone, both 'streamlit not available'), 0 failed -> 46 passed. Matches CLAIMED SUMMARY {total:48, passed:46, skipped:2, failed:0}. Per-class counts from verbose output sum to 48 and match all 13 CLAIMED CLASSES exactly: TestVolumeToWeight=2, TestValidation=3, TestDensities=3, TestConstructionFill=4, TestRingSizeAndCalibration=4, TestRefineShankConstructionWarning=2, TestReconcile=5, TestRobustAggregation=7, TestFinalizeConfidence=4, TestLoadImageBytes=4, TestScaleToTarget=6, TestDimensionAnnotation=2, TestCalculatedDepth=2. Spot-read 5 methods and confirmed each assertion matches actual code by re-executing the functions: (1) test_robust_point_median_at_n3 -> _robust_point([300,340,360])=340 (median, ignores low dissenter); (2) test_robust_point_mean_below_n3 -> _robust_point([300,360])=330.0 (mean at n<3); (3) test_high_outlier_rejected -> _robust_kept([330,340,350,1000])=[330,340,350] (1000 dropped, >50% band from median 345), _robust_point=340; (4) test_reconcile_reports_outlier_and_aggregation -> reconcile(330,340,350,1000) gives aggregation='median+outlier-reject', outliers_rejected=1, n_models=4, volume_mm3=340.0; (5) test_rejected_outlier_does_not_tank_confidence -> reconcile(335,340,345,1200) gives confidence='high', model_disagreement=0.029 (<0.10, measured on kept set). Also cross-checked TestReconcile.test_mean_weight: gold_weight_g=5.145, volume_mm3=340.0, aggregation='mean', outliers_rejected=0. Implementation constants confirmed: ROBUST_OUTLIER_TOL=0.5 (env-overridable), WEIGHT_MIN_MODELS=3. Only non-count delta: observed runtime 0.091s vs claimed 0.093s \u2014 normal timing jitter, not a discrepancy. No discrepancies found; claim is accurate."
+ },
+ "completeness": {
+  "verdict": "The gathered material (CATALOG suite summary, 4 EVIDENCE demos, 5 CODE-change bullets, 6 NARRATIVE keys) is accurate \u2014 I re-ran the suite (48 tests, 46 passed, 2 skipped, 0 failed via `python3 -m unittest tests.test_weight_regression`, since pytest is absent) and reproduced every demo number exactly (Demo A [332,340,351,720] kept=[332,340,351], volume 340.0, gold 5.145 g, 1 outlier rejected, disagreement 0.056, confidence high; plain mean would have been 435.75). But for an EXTENSIVE PDF it is NOT complete: it omits the statistical formalism (no breakdown-point proof, no pseudocode, no tolerance-band math), it hides several real behaviors of the code that a rigorous reader would immediately ask about (the aggregation LABEL can disagree with the estimator actually used when the kept set shrinks to 2; the `or xs` all-rejected fallback silently averages garbage; even-n median interpolates to a value no model produced; shank uses a robust point but outlier/aggregation/confidence are computed on the TOTAL column only; empty input reports aggregation:\"single\"+confidence:\"medium\"), and it has no reproduction appendix, no parameter/tuning section, and no honest discussion of where the change does nothing (n<=2) or could regress. The file under test is /Users/hemang/dev/JEWELBENCH-FORGE/weight_estimator.py; the suite is /Users/hemang/dev/JEWELBENCH-FORGE/tests/test_weight_regression.py.",
+  "missing": [
+   "A precise algorithm specification. The narrative describes _robust_kept/_robust_point/reconcile in prose but never states the exact decision logic as a spec: kept = {x in xs : x>0} when n<3 (no rejection); else med=median(xs), keep {x : med*(1-tol) <= x <= med*(1+tol)}, and if that set is EMPTY fall back to all of xs. The point estimate is median(kept) only when len(kept)>=3, otherwise mean(kept). A reader cannot reimplement or audit from the current text.",
+   "The single most important undocumented behavior: the `aggregation` label and `outliers_rejected` are derived from n_models and the TOTAL-volume kept set, but the actual point estimator switches on len(kept). When enough outliers are dropped that only 2 survive (e.g. [300,800,820] -> kept [800,820]), reconcile() LABELS the result 'median+outlier-reject' and reports outliers_rejected:1, yet volume_mm3 is 810.0 \u2014 a 2-point MEAN, not a median. The PDF presents median+outlier-reject as if the label guarantees a median; it does not. This needs to be stated explicitly.",
+   "The all-rejected fallback (`... or xs` on line 285). When estimates split into two far-apart clusters with no central mass (e.g. [100,200,900,1000], median 550), EVERY value lies outside the +/-50% band, the `or xs` clause keeps ALL of them, and the point becomes 550.0 \u2014 a value no model produced and that the outlier filter was meant to prevent. n_outliers is then 0 (len(kept)==n_models) so the report looks clean. This degenerate case is invisible in the current material and should be called out as a known limitation.",
+   "Even-n median interpolation. With an even-sized kept set (e.g. [330,340,350,360]) statistics.median returns 345.0 \u2014 the mean of the two middle values, not an actual estimate. The narrative repeatedly says the central value is 'a model's median estimate'; for even n it is an interpolated number. Worth one explicit sentence plus an example.",
+   "The breakdown point is asserted-by-intuition, never proven or bounded. A worked analysis is missing: at n=3 a single outlier is tolerated but TWO co-directional outliers move the median; at n=4 the probe [340,350,1000,1100] yields kept [340,350,1000] and point 350 (survives), but the method's true breakdown fraction (<50% by majority, with the practical caveat that 2 of 4 already corrupts the median) is never quantified.",
+   "Shank vs total asymmetry. shank_volume_mm3 is computed with its own _robust_point over the shank column, but outliers_rejected, aggregation, model_disagreement and confidence are ALL computed from the total column only. A model can be an inlier on total yet a wild outlier on shank (verified: shank col [170,900,175] -> robust shank 172.5 while total reports 0 outliers rejected). The shank's own rejection count is never surfaced. This decoupling is undocumented.",
+   "The ROBUST_OUTLIER_TOL=0.5 choice is unjustified. There is no sensitivity analysis: why 50% and not 30% or 40%, what false-rejection rate it implies for legitimately-disagreeing models, and how it interacts with the existing _SCALE clamp (0.4..2.5) and the confidence thresholds (0.10 / 0.25 disagreement). The band edges are inclusive (a value exactly at med*1.5 is KEPT, verified [200,300,450] keeps 450) \u2014 never stated.",
+   "No quantified before/after on the real 113-design ground-truth dataset (referenced in user memory). Every demo is a synthetic 3-4 number vector. A rigorous reader expects at least one table showing mean/median absolute weight error before (plain mean) vs after (robust) on actual catalog designs, or an explicit statement that this evaluation was not run and why.",
+   "Interaction with the upstream validation/calibration pipeline is unexplained. The demos feed reconcile() directly, but in estimate_weight() each estimate first passes through calibrate_to_ring_size (scale^3) and refine_shank_volume before reconcile. The PDF never shows that the volumes being reconciled are POST-calibration, nor how a clamped scale (_scale_clamped) or a construction-fill fallback could itself create the disagreement the robust step then rejects.",
+   "The n<3 graceful-degradation cases are under-specified for corner inputs: reconcile([]) returns aggregation:'single', confidence:'medium', gold_weight_g:0.0 (verified) \u2014 i.e. an EMPTY ensemble is labelled 'single' and 'medium', not flagged as a failure. The estimate_weight() all-models-failed path ({'_error':...}) is a separate code branch the tests do not cover and the material does not mention.",
+   "No coverage map / explicit gaps statement. 2 tests skip when streamlit is absent (TestCalculatedDepth) and the entire live VLM path (_call_model, _call_anthropic_vision, _build_montage, estimate_weight orchestration, ThreadPoolExecutor fan-out, fallback-pool walking) has ZERO unit tests \u2014 by design, but the PDF should say so plainly rather than imply 48 passing tests cover the feature end to end.",
+   "Environment/reproducibility facts are absent: the suite must be run with system python3 via `python3 -m unittest` (pytest is NOT installed in this environment \u2014 `python3 -m pytest` fails with 'No module named pytest'); runtime ~0.05-0.09s; all env knobs (ROBUST_OUTLIER_TOL, WEIGHT_MIN_MODELS, WEIGHT_CALL_RETRIES, CASTING_FACTOR, density overrides) that change outputs are undocumented in the material."
+  ],
+  "suggested_additions": [
+   "Algorithm pseudocode box for _robust_kept and _robust_point (and the reconcile() wrapper), written as exact steps with the n<3 short-circuit, the inclusive +/-50% band, and the `or xs` empty-fallback shown \u2014 so the method is auditable from the PDF alone.",
+   "A 'Worked example, step by step' figure tracing Demo A [332,340,351,720]: median=345.5, band=[172.75, 518.25], 720 excluded (>518.25), 332/340/351 kept, even? no (3 kept) -> median(kept)=340, x density 15.6 x casting 0.97 -> 5.145 g; side-by-side with the plain-mean path (mean 435.75 -> 6.59 g) to make the 1.45 g / ~28% correction concrete.",
+   "A breakdown-point subsection with a small proof/bound and a table of (n, max tolerated co-directional outliers, behavior): n=2 -> mean, no rejection; n=3 -> 1 tolerated; n=4 -> 1 cleanly, 2 corrupts; plus the 50/50-split degenerate case ([100,200,900,1000]->550) shown as the documented failure mode.",
+   "A 'Label vs estimator' clarification box stating that aggregation='median+outlier-reject' and outliers_rejected reflect n_models and the rejected count, NOT a guarantee that a median (vs a small-kept-set mean) produced the number \u2014 with the [300,800,820]->810 (2-point mean, still labelled median+outlier-reject) example.",
+   "A per-test trace table: one row per test in TestRobustAggregation and the two new TestReconcile tests (test_two_models_still_mean, plus the robust cases), columns = input vector, kept set, point estimate, expected assertion, what regression it guards. Mirror the existing CATALOG structure but for the NEW tests specifically.",
+   "A parameter/tuning section: ROBUST_OUTLIER_TOL (0.5) with a sensitivity curve or at least a 3-row table at tol=0.3/0.5/0.7 on the demo vectors; how it composes with the confidence thresholds (0.10/0.25) and the scale clamp (0.4..2.5); note the inclusive band edge.",
+   "A 'How to reproduce' appendix: exact commands (`python3 -m unittest tests.test_weight_regression -v` from repo root; note pytest is unavailable so do NOT use it; reconcile needs only stdlib, no venv), the {\"_model\":...,\"total_metal_volume_mm3\":V,\"shank_volume_mm3\":V*0.5} estimate-dict shape, env vars that alter output, and the observed runtime (~0.05s).",
+   "A pipeline diagram for estimate_weight(): montage -> parallel first-`target` models (each retrying x3) -> fallback walk to reach WEIGHT_MIN_MODELS good estimates -> per-estimate calibrate_to_ring_size + refine_shank_volume -> reconcile -> dims/stones from the volume-closest model -> _finalize_confidence. Shows where robust aggregation sits and that volumes are POST-calibration.",
+   "A 'Known limitations & where it does nothing' section consolidating: no effect at n<=2 (median==mean); the `or xs` cluster-split fallback; even-n median interpolation; shank rejection not surfaced; total-only confidence; untested live-VLM path; empty-ensemble labelled single/medium.",
+   "A figure contrasting shank vs total handling on one ensemble where a model is a total-inlier but shank-outlier (shank col [170,900,175] -> robust shank 172.5, total outliers_rejected 0), to make the asymmetry explicit and justified (or flag it as a follow-up).",
+   "A ground-truth evaluation table (or an explicit 'not yet measured' caveat) using the 113-design catalog: weight MAE/median error, plain-mean vs robust, to substantiate the 'better output quality' goal rather than relying solely on synthetic demos.",
+   "A test-coverage matrix listing each public/helper function (volume_to_weight, alloy_density, _has_valid_total, _sanitize_volumes, _construction_fill, _robust_kept, _robust_point, reconcile, _finalize_confidence, scale_to_target, _load_image_bytes) with covered/uncovered and the 2 skipped streamlit tests + the entirely-unit-untested network layer called out."
+  ]
+ }
+}
