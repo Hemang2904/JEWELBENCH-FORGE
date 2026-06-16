@@ -82,6 +82,34 @@ def _dim_view_prompts(meas: dict) -> dict:
             "Front — dimensioned": front, "Three-Quarter — dimensioned": iso}
 
 
+def _ai_dim_views(design_ref: str, meas: dict) -> dict:
+    """Fallback dimensioned views via the edit model. Each angle is an independent
+    edit, so the ring can DRIFT across views and the printed numbers can garble —
+    the geometry path (one mesh + code-drawn labels) is preferred when available."""
+    prompts = _dim_view_prompts(meas)
+    import fal_client
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _one(prompt: str):
+        r = fal_client.subscribe(
+            "fal-ai/nano-banana-pro/edit",
+            arguments={"image_urls": [design_ref], "prompt": prompt, "num_images": 1,
+                       "resolution": "2K", "aspect_ratio": "auto", "output_format": "png"})
+        return (r.get("images") or [{}])[0].get("url") or (r.get("image") or {}).get("url")
+
+    out: dict = {}
+    with ThreadPoolExecutor(max_workers=len(prompts)) as ex:
+        futs = {ex.submit(_one, p): n for n, p in prompts.items()}
+        for fu in as_completed(futs):
+            try:
+                u = fu.result()
+                if u:
+                    out[futs[fu]] = u
+            except Exception:
+                pass
+    return out
+
+
 def _us_ring_circ_mm(ring_size: str) -> float:
     """US ring size -> inner circumference (mm). 0 if unparseable."""
     try:
@@ -462,8 +490,10 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
                        use_container_width=True)
 
     st.markdown("##### 📑 Technical report — dimensioned views")
-    st.caption("Multiple views (top, side, front, three-quarter) labelled with "
-               "the **exact** measurements below — same values as the BoM.")
+    st.caption("Top / side / front / three-quarter, labelled with the **exact** "
+               "measurements below. In geometry mode they come from **one 3D mesh** "
+               "(consistent across angles) with the dimensions **drawn in code** "
+               "(crisp, never garbled or invented — unlike AI-rendered text).")
     # Authoritative legend: these are the only numbers the drawings may show.
     _c = meas.get("center") or {}
     st.markdown(
@@ -477,38 +507,29 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
 | Center stone | {_c.get('shape', '—')} {_c.get('length_mm', '—')} mm ({_c.get('carat_each', 0):.2f} ct) |
 """
     )
-    if st.button("Generate technical report (dimensioned views)",
-                 key="forge_dimviews", disabled=disabled,
-                 use_container_width=True):
-        prompts = _dim_view_prompts(meas)
-        import fal_client
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
-        def _one(prompt: str):
-            r = fal_client.subscribe(
-                "fal-ai/nano-banana-pro/edit",
-                arguments={"image_urls": [design_ref], "prompt": prompt,
-                           "num_images": 1, "resolution": "2K",
-                           "aspect_ratio": "auto", "output_format": "png"})
-            return (r.get("images") or [{}])[0].get("url") \
-                or (r.get("image") or {}).get("url")
-
+    geom = os.environ.get("VIEW_ENGINE", "edit").lower() == "geometry"
+    if st.button(
+            "Generate dimensioned views"
+            + (" — one 3D mesh, exact code-drawn labels" if geom else " (AI edit)"),
+            key="forge_dimviews", disabled=disabled, use_container_width=True):
         out: dict = {}
-        with st.status(f"Rendering {len(prompts)} dimensioned views...",
-                       expanded=True) as s:
-            with ThreadPoolExecutor(max_workers=len(prompts)) as ex:
-                futs = {ex.submit(_one, p): n for n, p in prompts.items()}
-                for f in as_completed(futs):
-                    name = futs[f]
-                    try:
-                        u = f.result()
-                        if u:
-                            out[name] = u
-                            st.write(f"✓ {name}")
-                        else:
-                            st.write(f"✗ {name}: no image")
-                    except Exception as e:
-                        st.write(f"✗ {name}: {e}")
+        with st.status("Rendering dimensioned views...", expanded=True) as s:
+            if geom:
+                try:
+                    import views3d
+                    s.update(label="Reconstructing one 3D mesh → consistent views → "
+                                   "dimensions drawn in code (crisp + exact)...")
+                    out, _glb = views3d.render_dimensioned_views(design_ref, meas)
+                    for n in out:
+                        st.write(f"✓ {n}")
+                except Exception as e:
+                    st.write(f"⚠️ geometry render failed ({str(e)[:110]}) — "
+                             "falling back to AI edit views")
+                    out = _ai_dim_views(design_ref, meas)
+            else:
+                out = _ai_dim_views(design_ref, meas)
+                for n in out:
+                    st.write(f"✓ {n}")
             st.session_state["forge_dim_views"] = out
             s.update(label=f"{len(out)} dimensioned view(s) rendered",
                      state="complete" if out else "error")

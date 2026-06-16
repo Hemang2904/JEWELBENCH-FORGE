@@ -255,5 +255,31 @@ class TestScaleToTarget(unittest.TestCase):
         self.assertLess(abs(shift - 0.05), 0.01)
 
 
+class TestDimensionAnnotation(unittest.TestCase):
+    """Code-drawn dimension labels: crisp, exact, never garbled (vs AI text)."""
+
+    def test_annotate_draws_crisp_labels(self):
+        import io
+        import numpy as np
+        from PIL import Image, ImageDraw
+        import views3d
+        img = Image.new("RGB", (480, 480), (255, 255, 255))
+        ImageDraw.Draw(img).ellipse([120, 110, 360, 420], outline=(196, 178, 150), width=40)
+        buf = io.BytesIO(); img.save(buf, format="PNG")
+        meas = {"band_width": 1.9, "band_thickness": 1.55, "head_diameter": 7.78,
+                "head_height": 7.35, "ring_size": "7", "gold_weight_g": 3.0}
+        out = views3d.annotate_view(buf.getvalue(), "Front Elevation", meas)
+        res = Image.open(io.BytesIO(out)).convert("RGB")
+        self.assertEqual(res.size, (480, 480))           # same canvas
+        a = np.asarray(res)
+        dark = int(((a[:, :, 0] < 80) & (a[:, :, 1] < 80) & (a[:, :, 2] < 80)).sum())
+        self.assertGreater(dark, 150)                    # crisp dark text/lines drawn
+
+    def test_overall_height_from_ring_size(self):
+        import views3d
+        h = views3d._overall_height_mm({"ring_size": "7", "band_thickness": 1.55, "head_height": 7.35})
+        self.assertTrue(27 < h < 29)  # ~17.3 inner + 3.1 band + 7.35 head
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
