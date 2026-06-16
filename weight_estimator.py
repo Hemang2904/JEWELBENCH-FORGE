@@ -29,6 +29,7 @@ import json
 import math
 import os
 import re
+import statistics
 import sys
 import time
 import urllib.request
@@ -46,13 +47,21 @@ WEIGHT_MODEL_SECONDARY = os.environ.get(
 # any-llm/vision is the existing path; kept overridable since fal marks it legacy.
 VISION_ENDPOINT = os.environ.get("WEIGHT_VISION_ENDPOINT", "fal-ai/any-llm/vision")
 # Extra models tried (in order) if the primary two don't BOTH return, so the
-# ensemble reliably ends up with two independent estimates.
+# ensemble reliably reaches WEIGHT_MIN_MODELS independent estimates. gpt-5-chat
+# is intentionally NOT a default — it returned physically-impossible geometry in
+# testing; gpt-5 (reasoning) is a safer diverse third family, and the median +
+# outlier rejection in reconcile() now protects against any single bad member.
 WEIGHT_FALLBACK_MODELS = [
     m.strip() for m in os.environ.get(
-        "WEIGHT_FALLBACK_MODELS", "openai/gpt-5-chat,google/gemini-2.5-flash",
+        "WEIGHT_FALLBACK_MODELS", "google/gemini-2.5-flash,openai/gpt-5",
     ).split(",") if m.strip()
 ]
-WEIGHT_CALL_RETRIES = int(os.environ.get("WEIGHT_CALL_RETRIES", "2"))
+WEIGHT_CALL_RETRIES = int(os.environ.get("WEIGHT_CALL_RETRIES", "3"))
+# Robust aggregation (median + outlier rejection) only bites at n>=3: at n=2 the
+# median equals the mean and one wrong model still drags the answer half-way. So
+# the ensemble TARGETS three good estimates; it still degrades gracefully to
+# mean (n=2) or single (n=1) when models fail.
+WEIGHT_MIN_MODELS = int(os.environ.get("WEIGHT_MIN_MODELS", "3"))
 CASTING_FACTOR = float(os.environ.get("CASTING_FACTOR", "0.97"))
 # Extra uncertainty padding applied to the min..max range (fraction).
 RANGE_PAD = float(os.environ.get("WEIGHT_RANGE_PAD", "0.05"))
@@ -256,6 +265,35 @@ def _mean(xs: list[float]) -> float:
     return sum(xs) / len(xs) if xs else 0.0
 
 
+# How far from the median an estimate may sit before it's treated as an outlier
+# and dropped from the central estimate (kept only for the spread/range).
+ROBUST_OUTLIER_TOL = float(os.environ.get("ROBUST_OUTLIER_TOL", "0.5"))
+
+
+def _robust_kept(xs: list[float]) -> list[float]:
+    """The estimates that survive outlier rejection.
+
+    n>=3: drop any value more than ROBUST_OUTLIER_TOL (default 50%) from the
+    median — so a model that hallucinates a double or half volume is ignored
+    rather than averaged in. n<3: keep everything (a single dissenter can't be
+    told apart from the truth, and median==mean at n<=2 anyway)."""
+    xs = [x for x in xs if isinstance(x, (int, float)) and x > 0]
+    if len(xs) < 3:
+        return xs
+    med = statistics.median(xs)
+    lo, hi = med * (1 - ROBUST_OUTLIER_TOL), med * (1 + ROBUST_OUTLIER_TOL)
+    return [x for x in xs if lo <= x <= hi] or xs
+
+
+def _robust_point(xs: list[float]) -> float:
+    """Central estimate that one wrong model can't drag: median of the kept set
+    at n>=3, mean below."""
+    kept = _robust_kept(xs)
+    if not kept:
+        return 0.0
+    return statistics.median(kept) if len(kept) >= 3 else sum(kept) / len(kept)
+
+
 def _range(xs: list[float], pad: float = RANGE_PAD) -> tuple[float, float]:
     """min..max across estimates, widened by `pad` for inherent uncertainty."""
     if not xs:
@@ -279,11 +317,17 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
     total_v = col("total_metal_volume_mm3")
     shank_v = col("shank_volume_mm3")
 
-    total_mean = _mean(total_v)
-    shank_mean = _mean(shank_v)
+    # Robust central estimate: median + outlier rejection at n>=3, mean below.
+    total_point = _robust_point(total_v)
+    shank_point = _robust_point(shank_v)
+    n_models = len(total_v)
+    kept = _robust_kept(total_v)
+    n_outliers = n_models - len(kept)
+    aggregation = ("median+outlier-reject" if n_models >= 3
+                   else "mean" if n_models == 2 else "single")
 
     # Single GOLD weight = the cast metal (volume x density x casting).
-    gold_weight = volume_to_weight(total_mean, density)
+    gold_weight = volume_to_weight(total_point, density)
 
     # Shank value as a min..max RANGE from model spread.
     shank_w = [volume_to_weight(v, density) for v in shank_v]
@@ -293,11 +337,12 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
     gold_w_all = [volume_to_weight(v, density) for v in total_v]
     gold_lo, gold_hi = _range(gold_w_all)
 
-    n_models = len(total_v)
     single_model = n_models < 2
+    # Disagreement measured on the KEPT set: a rejected outlier shouldn't tank
+    # confidence when the surviving models agree tightly.
     disagreement = 0.0
-    if total_mean > 0 and not single_model:
-        disagreement = round((max(total_v) - min(total_v)) / total_mean, 3)
+    if total_point > 0 and len(kept) >= 2:
+        disagreement = round((max(kept) - min(kept)) / total_point, 3)
 
     # A single model can't be cross-checked, so it never gets "high".
     if single_model:
@@ -315,11 +360,14 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
         "casting_factor": CASTING_FACTOR,
         "gold_weight_g": gold_weight,
         "gold_weight_range_g": [gold_lo, gold_hi],
-        "volume_mm3": round(total_mean, 1),
-        "shank_volume_mm3": round(shank_mean, 1),
+        "volume_mm3": round(total_point, 1),
+        "shank_volume_mm3": round(shank_point, 1),
         "shank_weight_range_g": [shank_lo, shank_hi],
         "models": [e.get("_model") for e in estimates if e],
+        "n_models": n_models,
         "single_model": single_model,
+        "aggregation": aggregation,
+        "outliers_rejected": n_outliers,
         "model_disagreement": disagreement,
         "confidence": confidence,
         "_per_model": estimates,
@@ -623,9 +671,12 @@ def _call_model(model: str, montage_url: str, prompt: str,
 def estimate_weight(image_urls: list[str], alloy: str,
                     ring_size: str | None = None,
                     models: list[str] | None = None) -> dict:
-    """Ensemble estimate. Tries the primary two in parallel, then walks the
-    fallback models until TWO independent estimates succeed — so a single
-    flaky model no longer collapses the ensemble. Live (needs FAL_KEY)."""
+    """Ensemble estimate. Runs the first WEIGHT_MIN_MODELS (default 3)
+    candidates in parallel, then walks the remaining fallbacks until that many
+    independent estimates succeed — so the median + outlier rejection in
+    reconcile() has enough votes to bite, and a single flaky model no longer
+    collapses the ensemble. Degrades gracefully to 2 (mean) or 1. Live (needs
+    FAL_KEY)."""
     pool = models or [WEIGHT_MODEL_PRIMARY, WEIGHT_MODEL_SECONDARY]
     seen: set[str] = set()
     ordered: list[str] = []
@@ -646,16 +697,20 @@ def estimate_weight(image_urls: list[str], alloy: str,
             errors.append({"model": res.get("_model"),
                            "error": res.get("_error") or "invalid/non-finite volume"})
 
-    # Phase 1: the primary two, in parallel (each already retries internally).
+    # Target enough independent estimates for robust aggregation to bite, but
+    # never demand more than we have candidates for.
+    target = max(2, min(WEIGHT_MIN_MODELS, len(ordered)))
+
+    # Phase 1: the first `target` candidates in parallel (each retries internally).
     from concurrent.futures import ThreadPoolExecutor
-    first = ordered[:2]
+    first = ordered[:target]
     with ThreadPoolExecutor(max_workers=max(1, len(first))) as ex:
         for res in ex.map(lambda m: _call_model(m, montage_url, prompt), first):
             _record(res)
 
-    # Phase 2: still short of two? walk the fallbacks one at a time.
-    for m in ordered[2:]:
-        if len(good) >= 2:
+    # Phase 2: still short? walk the remaining fallbacks one at a time.
+    for m in ordered[target:]:
+        if len(good) >= target:
             break
         _record(_call_model(m, montage_url, prompt))
 
@@ -678,8 +733,13 @@ def estimate_weight(image_urls: list[str], alloy: str,
            "scale_calibrated": bool(scales and any(s != 1.0 for s in scales)),
            "scale_applied": round(sum(scales) / len(scales), 3) if scales else 1.0,
            "inner_diameter_mm": round(us_ring_inner_diameter_mm(ring_size), 2)}
-    # Stones + key dimensions: take the first model that reported each.
-    for e in good:
+    # Stones + key dimensions: take them from the model whose total volume sits
+    # CLOSEST to the reconciled (median) volume — so a rejected outlier never
+    # supplies the geometry, even though it can't sway the weight.
+    ref_vol = out.get("volume_mm3") or 0.0
+    by_closeness = sorted(
+        good, key=lambda e: abs(float(e.get("total_metal_volume_mm3") or 0) - ref_vol))
+    for e in by_closeness:
         if e.get("stones") and "stones" not in out:
             out["stones"] = e["stones"]
         if e.get("key_dimensions_mm") and "key_dimensions_mm" not in out:

@@ -155,6 +155,56 @@ class TestReconcile(unittest.TestCase):
         self.assertTrue(r["single_model"])
         self.assertEqual(r["confidence"], "medium")
 
+    def test_two_models_still_mean(self):
+        # Backward-compat: at n=2 the aggregation stays mean (median==mean).
+        r = we.reconcile(self._two(320, 360), "18k_yellow_gold")
+        self.assertEqual(r["aggregation"], "mean")
+        self.assertEqual(r["volume_mm3"], 340.0)
+        self.assertEqual(r["outliers_rejected"], 0)
+
+
+class TestRobustAggregation(unittest.TestCase):
+    """median + outlier rejection so one wrong model can't drag the weight."""
+    def _est(self, *vols):
+        return [{"_model": f"m{i}", "total_metal_volume_mm3": v,
+                 "shank_volume_mm3": v * 0.5} for i, v in enumerate(vols)]
+
+    def test_robust_point_median_at_n3(self):
+        # mean would be 333.3; median is 340 and ignores the low dissenter.
+        self.assertEqual(we._robust_point([300, 340, 360]), 340)
+
+    def test_robust_point_mean_below_n3(self):
+        self.assertEqual(we._robust_point([300, 360]), 330)
+
+    def test_high_outlier_rejected(self):
+        # [330,340,350,1000]: median 345, >50% band drops 1000; median(kept)=340.
+        kept = we._robust_kept([330, 340, 350, 1000])
+        self.assertNotIn(1000, kept)
+        self.assertEqual(we._robust_point([330, 340, 350, 1000]), 340)
+
+    def test_low_outlier_rejected(self):
+        # a half-volume hallucination is dropped too.
+        self.assertNotIn(100, we._robust_kept([340, 350, 360, 100]))
+
+    def test_reconcile_reports_outlier_and_aggregation(self):
+        r = we.reconcile(self._est(330, 340, 350, 1000), "18k_yellow_gold")
+        self.assertEqual(r["aggregation"], "median+outlier-reject")
+        self.assertEqual(r["outliers_rejected"], 1)
+        self.assertEqual(r["n_models"], 4)
+        self.assertEqual(r["volume_mm3"], 340.0)  # outlier did NOT sway it
+
+    def test_rejected_outlier_does_not_tank_confidence(self):
+        # three models agree tightly; one is wild -> still high confidence,
+        # because disagreement is measured on the surviving set.
+        r = we.reconcile(self._est(335, 340, 345, 1200), "18k_yellow_gold")
+        self.assertEqual(r["confidence"], "high")
+        self.assertLess(r["model_disagreement"], 0.10)
+
+    def test_no_false_rejection_when_all_agree(self):
+        r = we.reconcile(self._est(330, 340, 350), "18k_yellow_gold")
+        self.assertEqual(r["outliers_rejected"], 0)
+        self.assertEqual(r["volume_mm3"], 340.0)
+
 
 class TestFinalizeConfidence(unittest.TestCase):
     def test_calibrated_stays_confident(self):
