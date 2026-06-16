@@ -339,10 +339,22 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
             "match it; the image supplies only proportions, so there is no dependence on "
             "visual size estimation.")
 
+    # How the per-model estimates were combined into the headline number.
+    _agg = est.get("aggregation")
+    _nm = est.get("n_models", len(est.get("models", [])))
+    _drop = est.get("outliers_rejected", 0)
+    if _agg == "median+outlier-reject":
+        _combine = (f"median of {_nm} models"
+                    + (f", {_drop} outlier{'s' if _drop != 1 else ''} dropped" if _drop else ""))
+    elif _agg == "mean":
+        _combine = "mean of 2 models"
+    else:
+        _combine = "single model"
     st.caption(
         f"Shank weight range: **{shank_lo:.2f}–{shank_hi:.2f} g** · "
         f"alloy density {est.get('density_g_cm3')} g/cm³ · "
         f"casting factor {est.get('casting_factor')} · "
+        f"combined by {_combine} · "
         f"models: {', '.join(str(m) for m in est.get('models', []))}"
     )
 
