@@ -399,12 +399,34 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
     if _xc:
         st.caption(_xc)
 
-    # Reference-weight sanity (typical rings ~1.5-15 g; research band).
+    # Dimension-based ring cross-check + ring-aware plausibility, both calibrated
+    # on 112 real rings. The dims estimate is deterministic and ~10% accurate on
+    # real rings (tighter than the vision volume), so it's a strong second opinion.
     _gw = est.get("gold_weight_g") or 0
-    if _gw and (_gw < 0.8 or _gw > 50):
-        st.caption(f"⚠️ {_gw:.1f} g is outside the typical ring range "
-                   "(~1.5–15 g) — re-check dimensions, ring size and "
-                   "solid/hollow construction.")
+    _alloy = est.get("alloy") or "18k_yellow_gold"
+    _kd = est.get("key_dimensions_mm") or {}
+    _dim_g = we.ring_weight_from_dims(_kd.get("band_width"), _kd.get("band_thickness"),
+                                      ring_size, _alloy)
+    if _dim_g and not targeted:
+        _delta = (_gw - _dim_g) / _dim_g * 100 if _dim_g else 0
+        base = (f"📐 Dimension-based ring estimate: **{_dim_g:.2f} g** "
+                f"(band {_kd.get('band_width')}×{_kd.get('band_thickness')} mm at US {ring_size}; "
+                f"geometry-only, ~10% on 112 real rings)")
+        if _gw and abs(_delta) > 25:
+            st.warning("⚠️ " + base + f". This differs from the volume estimate "
+                       f"({_gw:.2f} g) by {_delta:+.0f}% — re-check band dimensions / construction.")
+        else:
+            st.caption(base + (f"; volume estimate agrees within {abs(_delta):.0f}%." if _gw else "."))
+    if _gw:
+        _lvl, (_lo, _hi) = we.ring_weight_plausible(_gw, _alloy)
+        if _lvl == "warn":
+            st.error(f"⚠️ {_gw:.1f} g is outside the plausible ring range "
+                     f"({_lo:.0f}–{_hi:.0f} g) — re-check dimensions, ring size and "
+                     "solid/hollow construction.")
+        elif _lvl == "note":
+            st.caption(f"ℹ️ {_gw:.1f} g is outside the typical 18k solitaire band "
+                       f"({_lo:.1f}–{_hi:.1f} g, from 112 real rings) — fine for a "
+                       "heavier/lighter style, worth a sanity check.")
     if est.get("single_model"):
         st.warning("⚠️ Only one model returned — the ensemble cross-check "
                    "didn't run, so treat this as a single-model estimate "

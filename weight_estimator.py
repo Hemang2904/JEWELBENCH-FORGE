@@ -211,6 +211,51 @@ def parametric_shank_volume(inner_d_mm: float, band_w: float, band_t: float,
     return band_w * band_t * centerline * fill
 
 
+# ── Ring weight straight from band dimensions ───────────────────────────────────
+# Calibrated against 112 real 18k rings (true gold_18k_g + dims): the rectangular
+# band cross-section x centreline circumference with NO fill reduction reproduces
+# the TRUE total weight to ~10% median / -5% bias on solid solitaires — the
+# rounded-cross-section under-fill and the head/setting metal roughly cancel.
+# (fill 1.05 zeroes the bias at ~11% median; 1.0 minimises the error.) This is
+# MORE accurate for rings than the vision volume ensemble (~16%), since the band
+# dominates the metal (~99% by the shank estimate).
+_RING_SHANK_FILL = float(os.environ.get("RING_SHANK_FILL", "1.0"))
+# Plausible gold-weight band for a SOLITAIRE ring, from the 112-ring catalog:
+# p05 2.6, median 3.3, p95 4.9, full 2.0-5.4 g (18k yellow). A general ring can be
+# heavier (men's / cocktail), so only <1 g or >40 g is treated as implausible.
+_RING_SOLITAIRE_BAND_18K = (2.6, 4.9)
+_RING_HARD_BAND_18K = (1.0, 40.0)
+
+
+def ring_weight_from_dims(band_w, band_t, ring_size,
+                          alloy: str = "18k_yellow_gold") -> float | None:
+    """Deterministic ring weight from band width/thickness + US size — no vision
+    volume needed. Calibrated to ~10% median error on 112 real rings. Returns
+    grams, or None if inputs are missing."""
+    inner = us_ring_inner_diameter_mm(ring_size)
+    if not (band_w and band_t and inner > 0):
+        return None
+    vol = parametric_shank_volume(float(inner), float(band_w), float(band_t), _RING_SHANK_FILL)
+    return volume_to_weight(vol, alloy_density(alloy))
+
+
+def ring_weight_plausible(grams: float,
+                          alloy: str = "18k_yellow_gold") -> tuple[str, tuple]:
+    """Sanity-check a ring gold weight against the real-ring catalog.
+    Returns (level, (lo, hi)) where level is 'ok' | 'note' | 'warn'. The band
+    scales with the alloy density relative to 18k yellow."""
+    if not grams or grams <= 0:
+        return "ok", _RING_SOLITAIRE_BAND_18K
+    scale = alloy_density(alloy) / alloy_density("18k_yellow_gold")
+    soft = (_RING_SOLITAIRE_BAND_18K[0] * scale, _RING_SOLITAIRE_BAND_18K[1] * scale)
+    hard = (_RING_HARD_BAND_18K[0] * scale, _RING_HARD_BAND_18K[1] * scale)
+    if grams < hard[0] or grams > hard[1]:
+        return "warn", (round(hard[0], 1), round(hard[1], 1))
+    if grams < soft[0] or grams > soft[1]:
+        return "note", (round(soft[0], 1), round(soft[1], 1))
+    return "ok", (round(soft[0], 1), round(soft[1], 1))
+
+
 def refine_shank_volume(est: dict) -> None:
     """Replace the model's shank-volume GUESS with the closed-form value from
     the calibrated band dimensions + known inner diameter, and fix the total to
