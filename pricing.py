@@ -10,6 +10,8 @@ price API (Rapaport is licensed). diamond_rates.json ships an editable
 reference table; the UI labels every diamond cost as "reference rate".
 """
 
+from __future__ import annotations
+
 import json
 import os
 import time

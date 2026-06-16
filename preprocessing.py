@@ -7,6 +7,8 @@ backgrounds in the final output — without it, Seedream averages with
 whatever background the input had.
 """
 
+from __future__ import annotations
+
 import io
 import json
 import os
