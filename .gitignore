@@ -12,3 +12,8 @@ build/
 ground_truth/
 eval_runs/
 *.3dm
+
+# truth-table build artifacts (contain external-drive paths)
+tools/parsed_records.json
+tools/_volcache.json
+tools/report_content.json
