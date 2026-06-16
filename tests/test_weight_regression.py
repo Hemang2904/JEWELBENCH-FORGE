@@ -281,5 +281,35 @@ class TestDimensionAnnotation(unittest.TestCase):
         self.assertTrue(27 < h < 29)  # ~17.3 inner + 3.1 band + 7.35 head
 
 
+class TestCalculatedDepth(unittest.TestCase):
+    """Prefer CALCULATED depth dims over vision guesses (catalog-validated):
+    band thickness de-biased, head height from the center stone."""
+
+    def _forge(self):
+        try:
+            import forge_bom
+            return forge_bom
+        except Exception:  # noqa: BLE001 — streamlit may be absent
+            self.skipTest("streamlit not available")
+
+    def test_band_thickness_debiased_width_kept(self):
+        fb = self._forge()
+        est = {"key_dimensions_mm": {"band_width": 2.0, "band_thickness": 1.5},
+               "shank_volume_mm3": 180.0}
+        bw, bt = fb._derive_band_dims(est, "7")
+        self.assertAlmostEqual(bw, 2.0, 2)                    # width unchanged
+        self.assertAlmostEqual(bt, round(1.5 * 1.19, 2), 2)  # thickness de-biased
+
+    def test_head_height_calculated_from_center_stone(self):
+        fb = self._forge()
+        est = {"key_dimensions_mm": {"head_height": 4.0, "head_diameter": 11.0},
+               "gold_weight_g": 3.0, "shank_volume_mm3": 180.0, "volume_mm3": 250.0}
+        dia = {"groups": [{"shape": "round", "length_mm": 8.0, "carat_each": 1.0, "count": 1}]}
+        metal = {"gold_weight_g": 3.0, "shank_value_usd": [1.0, 2.0]}
+        meas = fb._measurements(est, metal, dia, "7")
+        # head height = 0.88 * 8.0 = 7.04, NOT the model's vision 4.0
+        self.assertAlmostEqual(meas["head_height"], round(8.0 * 0.88, 1), 1)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
