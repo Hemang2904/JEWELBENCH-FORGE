@@ -29,6 +29,52 @@ def _disambiguate_cut(desc: str) -> str:
     return desc
 
 
+_ORDINALS = ["first", "second", "third", "fourth", "fifth"]
+
+
+def build_combine_prompt_lean(image_specs, additional_specs):
+    """Concise, POSITIVE prompt for Gemini-class edit models (nano-banana-pro).
+
+    Gemini follows clear, affirmative, region-bound instructions far better than
+    the 500-word negative-laden Seedream prompt — which on Gemini tends to fight
+    the model and INCREASE run-to-run variance. Each component is bound to its
+    source image by position ("the first image"), reproduced 1:1, then fused. We
+    keep only the few negatives that matter (one ring, no floating parts)."""
+    active = [s for s in image_specs if s.get("file") and s.get("description")]
+    parts = [_disambiguate_cut(s["description"].strip().rstrip(".")) for s in active]
+
+    take = []
+    for i, desc in enumerate(parts):
+        where = f"the {_ORDINALS[i]} image" if i < len(_ORDINALS) else f"image {i + 1}"
+        take.append(f"- Take the {desc} from {where}, reproduced EXACTLY — same metal "
+                    f"colour, shape, stones, prongs, surface finish, width and proportions. "
+                    f"Use nothing else from {where}.")
+    take_block = "\n".join(take)
+    combo = " + ".join(f"the {p}" for p in parts) if parts else "the assembled ring"
+
+    metal = additional_specs.get("_metal_applied") or additional_specs.get("metal")
+    metal_line = (f"Render the entire ring in {metal}."
+                  if metal else
+                  "Keep each part's original metal colour; if the parts differ, show genuine "
+                  "two-tone metal with a crisp boundary where the colours meet (do not blend).")
+    stones = additional_specs.get("stones")
+    stone_line = (f"Stones: {stones.strip()}." if stones else
+                  "All faceted stones are colourless white diamonds unless a colored gem is named.")
+    notes = additional_specs.get("notes")
+
+    return (
+        f"Combine these reference photos into ONE photorealistic, finished ring that fuses "
+        f"{combo}.\n\n{take_block}\n\n"
+        "Fuse the borrowed parts into a single continuous cast ring — the head and shank join "
+        "through a real basket/undergallery into one solid piece, with no gap and no floating or "
+        "detached parts. Output exactly ONE ring (not two rings, not a stack, not an exploded view).\n"
+        f"{metal_line}\n{stone_line}\n"
+        "Studio product shot: a clean 3/4 angle, both shoulders symmetric, centred on a pure white "
+        "background, sharp focus, no text or props."
+        + (f"\nExtra notes: {notes.strip()}." if notes else "")
+    )
+
+
 def build_combine_prompt(image_specs, additional_specs):
     """Master prompt tuned for fal-ai/bytedance/seedream/v4/edit.
 

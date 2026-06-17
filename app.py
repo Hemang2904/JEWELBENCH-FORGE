@@ -26,6 +26,7 @@ except Exception:
 import fal_client
 from prompts import (
     build_combine_prompt,
+    build_combine_prompt_lean,
     build_target_summary,
     build_correction_addendum,
 )
@@ -496,6 +497,24 @@ def upload_to_fal(uploaded_file):
 # camera-change prompt). The strong identity prompt below curbs design drift.
 VIEW_MODEL = os.environ.get("VIEW_MODEL", "fal-ai/nano-banana-pro/edit")
 
+# Mix & Match combine step. Best model for this job = Nano Banana 2 (the latest
+# Gemini image editor: top-tier multi-image composition + instruction following,
+# photoreal jewelry, supports num_images for best-of-N + a steering system_prompt).
+# Configurable: COMBINE_MODEL=fal-ai/flux-2-pro/edit gives @image1/@image2 index
+# referencing; fal-ai/bytedance/seedream/v4/edit pairs with COMBINE_PROMPT_STYLE=full.
+COMBINE_MODEL = os.environ.get("COMBINE_MODEL", "fal-ai/nano-banana-2/edit")
+COMBINE_PROMPT_STYLE = os.environ.get("COMBINE_PROMPT_STYLE", "lean")
+# QUALITY: render N candidates per attempt and keep the one that best matches the
+# target spec (image gen is stochastic — best-of-N + validation is the main lever).
+COMBINE_CANDIDATES = max(1, int(os.environ.get("COMBINE_CANDIDATES", "3")))
+_COMBINE_SYSTEM_PROMPT = (
+    "You are a master jeweler's rendering engine. Assemble ONE finished, "
+    "photorealistic ring by taking the exact specified component from each "
+    "reference image and fusing them into a single continuous cast piece. "
+    "Reproduce each borrowed part faithfully — its metal color, stones, prongs and "
+    "proportions — and never invent, restyle, beautify, or blend components."
+)
+
 # Additional-Views engine: "edit" (default) re-prompts an image-edit model;
 # "geometry" reconstructs a 3D mesh (fal image-to-3D) and renders TRUE
 # orthographic angles — the only way to get a real top-down / underside view.
@@ -635,6 +654,46 @@ def extract_image_url(result):
     if "image" in result:
         return result["image"].get("url")
     return None
+
+
+def extract_all_image_urls(result):
+    """All candidate image URLs from a fal result (for best-of-N validation)."""
+    if not result:
+        return []
+    urls = [img["url"] for img in (result.get("images") or []) if img.get("url")]
+    if not urls and (result.get("image") or {}).get("url"):
+        urls.append(result["image"]["url"])
+    return urls
+
+
+def _combine_args(model, image_urls, prompt, seed, n):
+    """Per-model argument schema — the top edit models take different fields."""
+    m = model.lower()
+    if "flux-2" in m or "flux2" in m:                     # FLUX.2 [pro]: image_size, no num_images
+        return {"image_urls": image_urls, "prompt": prompt, "seed": seed, "output_format": "png"}
+    if "seedream" in m:                                   # Seedream v4 edit
+        return {"image_urls": image_urls, "prompt": prompt, "seed": seed, "num_images": n}
+    return {                                              # Nano Banana 2 / pro (Gemini)
+        "image_urls": image_urls, "prompt": prompt, "num_images": n,
+        "resolution": "2K", "output_format": "png", "seed": seed,
+        "system_prompt": _COMBINE_SYSTEM_PROMPT,
+    }
+
+
+def generate_candidates(model, image_urls, prompt, seed, n):
+    """Return up to n candidate image URLs. Uses num_images for models that batch
+    (one call); FLUX.2 has no num_images, so it gets n seeded calls."""
+    m = model.lower()
+    if "flux-2" in m or "flux2" in m:
+        urls = []
+        for i in range(n):
+            res = fal_client.subscribe(model, arguments=_combine_args(model, image_urls, prompt, seed + i, 1))
+            u = extract_image_url(res)
+            if u:
+                urls.append(u)
+        return urls
+    res = fal_client.subscribe(model, arguments=_combine_args(model, image_urls, prompt, seed, n))
+    return extract_all_image_urls(res)
 
 
 # ── ENGINE CHECK & SETTINGS ──────────────────────────────────────────────────
@@ -845,6 +904,9 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+# Deterministic seed -> the SAME references + descriptions reproduce the SAME
+# design (no more random run-to-run drift). "New variation" re-rolls it on demand.
+st.session_state.setdefault("combine_seed", 7)
 _gen_cols = st.columns([1, 4, 1])
 with _gen_cols[1]:
     generate_clicked = st.button(
@@ -853,6 +915,14 @@ with _gen_cols[1]:
         type="primary",
         disabled=not _ready,
     )
+    _vary = st.checkbox(
+        "🎲 New variation each run",
+        value=False,
+        help="Off = reproducible (same inputs give the same design). On = a fresh "
+             "look every generate.",
+    )
+if generate_clicked and _vary:
+    st.session_state.combine_seed = (st.session_state.combine_seed * 1103515245 + 12345) % 2147483647
 
 
 # ── GENERATION ───────────────────────────────────────────────────────
@@ -881,7 +951,9 @@ if generate_clicked and _ready:
 
         # Phase 3
         st.write("📝 Phase 3/5 — Building master combination prompt...")
-        combine_prompt = build_combine_prompt(enriched_specs, additional_specs)
+        _builder = (build_combine_prompt_lean if COMBINE_PROMPT_STYLE == "lean"
+                    else build_combine_prompt)
+        combine_prompt = _builder(enriched_specs, additional_specs)
         target_summary = build_target_summary(enriched_specs, additional_specs)
         st.write("✓ Prompt built")
 
@@ -912,57 +984,57 @@ if generate_clicked and _ready:
         correction_addenda = []
 
         for attempt in range(1, MAX_VALIDATION_TRIES + 1):
-            st.write(f"✨ Phase 4/5 — Rendering attempt {attempt}/{MAX_VALIDATION_TRIES} at 2K...")
+            st.write(f"✨ Phase 4/5 — Rendering attempt {attempt}/{MAX_VALIDATION_TRIES} — "
+                     f"{COMBINE_CANDIDATES} candidate(s) at 2K...")
             try:
-                result = fal_client.subscribe(
-                    "fal-ai/nano-banana-pro/edit",
-                    arguments={
-                        "image_urls": image_urls,
-                        "prompt": current_prompt,
-                        "num_images": 1,
-                        "resolution": "2K",
-                        "aspect_ratio": "auto",
-                        "output_format": "png",
-                    },
+                cand_urls = generate_candidates(
+                    COMBINE_MODEL, image_urls, current_prompt,
+                    st.session_state.combine_seed, COMBINE_CANDIDATES,
                 )
             except Exception as e:
                 st.warning(f"Attempt {attempt} render failed: {e}")
                 attempts_log.append({"attempt": attempt, "error": str(e)})
                 continue
 
-            url = extract_image_url(result)
-            if not url:
+            if not cand_urls:
                 attempts_log.append({"attempt": attempt, "error": "no image returned"})
                 continue
 
-            try:
-                url = strip_url_to_white(url)
-            except Exception:
-                pass
+            # QUALITY GATE: validate EVERY candidate, keep the best-matching one.
+            st.write(f"🎯 Phase 5/5 — Validating {len(cand_urls)} candidate(s) against target spec...")
+            attempt_best = None      # (url, score, diagnosis) for this attempt
+            for ci, raw_url in enumerate(cand_urls):
+                url = raw_url
+                try:
+                    url = strip_url_to_white(url)
+                except Exception:
+                    pass
+                diagnosis = validate_design(url, target_summary)
+                cscore = diagnosis.get("score", 0)
+                if attempt_best is None or cscore > attempt_best[1]:
+                    attempt_best = (url, cscore, diagnosis)
+                if cscore > best_score:          # global best across all attempts/candidates
+                    best_url, best_score, best_diagnosis = url, cscore, diagnosis
 
-            st.write(f"🎯 Phase 5/5 — Validating attempt {attempt} against target spec...")
-            diagnosis = validate_design(url, target_summary)
-            score = diagnosis.get("score", 0)
-            attempts_log.append({"attempt": attempt, "score": score, "url": url})
+            url, score, diagnosis = attempt_best
+            if len(cand_urls) > 1:
+                st.write(f"   best candidate {score}/100 (of {len(cand_urls)})")
+            attempts_log.append({"attempt": attempt, "score": score,
+                                 "candidates": len(cand_urls), "url": url})
 
-            if score > best_score:
-                best_url = url
-                best_score = score
-                best_diagnosis = diagnosis
-
-            if score >= VALIDATION_THRESHOLD:
-                st.write(f"✓ Passed validation — score {score}/100")
+            if best_score >= VALIDATION_THRESHOLD:
+                st.write(f"✓ Passed validation — score {best_score}/100")
                 break
 
             if attempt > 1 and score < prev_score:
                 attempts_log[-1]["regressed"] = True
-                st.write(f"⚠ Score regressed ({score} < {prev_score}), stopping early")
+                st.write(f"⚠ Best-candidate score regressed ({score} < {prev_score}), stopping early")
                 break
 
             prev_score = score
 
             if attempt < MAX_VALIDATION_TRIES:
-                st.write(f"↻ Score {score}% — below threshold {VALIDATION_THRESHOLD}%, refining prompt...")
+                st.write(f"↻ Best {score}% — below threshold {VALIDATION_THRESHOLD}%, refining prompt...")
                 correction_addenda.append(build_correction_addendum(diagnosis, attempt + 1))
                 current_prompt = combine_prompt + "\n\n" + "\n\n".join(correction_addenda)
 
@@ -1138,43 +1210,39 @@ if st.session_state.get("last_results"):
                 for attempt in range(1, MAX_VALIDATION_TRIES + 1):
                     st.write(f"✨ Rendering attempt {attempt}/{MAX_VALIDATION_TRIES}...")
                     try:
-                        result = fal_client.subscribe(
-                            "fal-ai/nano-banana-pro/edit",
-                            arguments={
-                                "image_urls": image_urls,
-                                "prompt": r_current_prompt,
-                                "num_images": 1,
-                                "resolution": "2K",
-                                "aspect_ratio": "auto",
-                                "output_format": "png",
-                            },
+                        cand_urls = generate_candidates(
+                            COMBINE_MODEL, image_urls, r_current_prompt,
+                            st.session_state.combine_seed, COMBINE_CANDIDATES,
                         )
                     except Exception as e:
                         r_attempts_log.append({"attempt": attempt, "error": str(e)})
                         continue
 
-                    url = extract_image_url(result)
-                    if not url:
+                    if not cand_urls:
                         r_attempts_log.append({"attempt": attempt, "error": "no image returned"})
                         continue
 
-                    try:
-                        url = strip_url_to_white(url)
-                    except Exception:
-                        pass
+                    st.write(f"🎯 Validating {len(cand_urls)} candidate(s)...")
+                    r_attempt_best = None
+                    for raw_url in cand_urls:
+                        url = raw_url
+                        try:
+                            url = strip_url_to_white(url)
+                        except Exception:
+                            pass
+                        diagnosis = validate_design(url, refinement_target)
+                        cscore = diagnosis.get("score", 0)
+                        if r_attempt_best is None or cscore > r_attempt_best[1]:
+                            r_attempt_best = (url, cscore, diagnosis)
+                        if cscore > r_best_score:
+                            r_best_url, r_best_score, r_best_diagnosis = url, cscore, diagnosis
 
-                    st.write(f"🎯 Validating attempt {attempt}...")
-                    diagnosis = validate_design(url, refinement_target)
-                    score = diagnosis.get("score", 0)
-                    r_attempts_log.append({"attempt": attempt, "score": score, "url": url})
+                    url, score, diagnosis = r_attempt_best
+                    r_attempts_log.append({"attempt": attempt, "score": score,
+                                           "candidates": len(cand_urls), "url": url})
 
-                    if score > r_best_score:
-                        r_best_url = url
-                        r_best_score = score
-                        r_best_diagnosis = diagnosis
-
-                    if score >= VALIDATION_THRESHOLD:
-                        st.write(f"✓ Passed — score {score}/100")
+                    if r_best_score >= VALIDATION_THRESHOLD:
+                        st.write(f"✓ Passed — score {r_best_score}/100")
                         break
                     if attempt > 1 and score < r_prev_score:
                         r_attempts_log[-1]["regressed"] = True
