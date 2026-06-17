@@ -424,8 +424,8 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
                      f"({_lo:.0f}–{_hi:.0f} g) — re-check dimensions, ring size and "
                      "solid/hollow construction.")
         elif _lvl == "note":
-            st.caption(f"ℹ️ {_gw:.1f} g is outside the typical 18k solitaire band "
-                       f"({_lo:.1f}–{_hi:.1f} g, from 112 real rings) — fine for a "
+            st.caption(f"ℹ️ {_gw:.1f} g is outside the typical ring band "
+                       f"({_lo:.1f}–{_hi:.1f} g, from 2,046 real ring designs) — fine for a "
                        "heavier/lighter style, worth a sanity check.")
     if est.get("single_model"):
         st.warning("⚠️ Only one model returned — the ensemble cross-check "

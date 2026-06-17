@@ -17,3 +17,4 @@ eval_runs/
 tools/parsed_records.json
 tools/_volcache.json
 tools/report_content.json
+tools/_ring_volcache.json

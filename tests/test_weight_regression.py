@@ -115,10 +115,10 @@ class TestRingSizeAndCalibration(unittest.TestCase):
 
 
 class TestRingFromDims(unittest.TestCase):
-    """Deterministic dims-based ring weight + ring-aware sanity, calibrated on
-    112 real rings (~10% median error, typical 18k solitaire 2.6-4.9 g)."""
+    """Deterministic dims-based ring weight + ring-aware sanity. Band calibrated
+    on 2,046 real ring designs: typical (p05-p95) 2.0-19.0 g, hard 0.8-39 g."""
     def test_typical_solitaire_weight(self):
-        # a 2.0 x 1.7 mm band at US 7 -> ~3.0 g, near the 3.3 g real-ring median
+        # a 2.0 x 1.7 mm band at US 7 -> ~3.0 g, a light solitaire
         g = we.ring_weight_from_dims(2.0, 1.7, "7")
         self.assertIsNotNone(g)
         self.assertTrue(2.7 <= g <= 3.4, f"got {g}")
@@ -128,14 +128,16 @@ class TestRingFromDims(unittest.TestCase):
         self.assertIsNone(we.ring_weight_from_dims(2.0, 1.7, ""))
 
     def test_plausible_levels(self):
-        self.assertEqual(we.ring_weight_plausible(3.3)[0], "ok")
-        self.assertEqual(we.ring_weight_plausible(6.0)[0], "note")   # above solitaire, still plausible
+        self.assertEqual(we.ring_weight_plausible(6.2)[0], "ok")     # the real median
+        self.assertEqual(we.ring_weight_plausible(3.3)[0], "ok")     # solitaire, well inside now
+        self.assertEqual(we.ring_weight_plausible(25.0)[0], "note")  # heavy cocktail: unusual but real
+        self.assertEqual(we.ring_weight_plausible(1.5)[0], "note")   # very light: unusual but possible
         self.assertEqual(we.ring_weight_plausible(0.5)[0], "warn")   # implausibly light
         self.assertEqual(we.ring_weight_plausible(60)[0], "warn")    # implausibly heavy
 
     def test_band_scales_with_density(self):
-        _, yb = we.ring_weight_plausible(3.3, "18k_yellow_gold")
-        _, wb = we.ring_weight_plausible(3.3, "18k_white_gold")  # lower density
+        _, yb = we.ring_weight_plausible(6.2, "18k_yellow_gold")
+        _, wb = we.ring_weight_plausible(6.2, "18k_white_gold")  # lower density
         self.assertLess(wb[1], yb[1])
 
 
