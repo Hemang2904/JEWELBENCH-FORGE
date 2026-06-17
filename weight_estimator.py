@@ -220,11 +220,14 @@ def parametric_shank_volume(inner_d_mm: float, band_w: float, band_t: float,
 # MORE accurate for rings than the vision volume ensemble (~16%), since the band
 # dominates the metal (~99% by the shank estimate).
 _RING_SHANK_FILL = float(os.environ.get("RING_SHANK_FILL", "1.0"))
-# Plausible gold-weight band for a SOLITAIRE ring, from the 112-ring catalog:
-# p05 2.6, median 3.3, p95 4.9, full 2.0-5.4 g (18k yellow). A general ring can be
-# heavier (men's / cocktail), so only <1 g or >40 g is treated as implausible.
-_RING_SOLITAIRE_BAND_18K = (2.6, 4.9)
-_RING_HARD_BAND_18K = (1.0, 40.0)
+# Plausible gold-weight band, measured from 2,046 REAL ring CAD designs (STL
+# meshes spanning solitaires, plain/eternity bands, and cocktail rings) at 18k
+# density: median 6.2 g, p05-p95 2.0-19.0 g, p99 31 g, full 0.5-56 g. (The old
+# 112-design catalog was ALL small solitaires, median 3.3 g — far too narrow,
+# it false-flagged every normal/heavy ring.) "typical" = p05-p95; outside the
+# "hard" band (~p01..p99) is treated as implausible. Both scale with alloy density.
+_RING_TYPICAL_BAND_18K = (2.0, 19.0)
+_RING_HARD_BAND_18K = (0.8, 39.0)
 
 
 def ring_weight_from_dims(band_w, band_t, ring_size,
@@ -241,13 +244,13 @@ def ring_weight_from_dims(band_w, band_t, ring_size,
 
 def ring_weight_plausible(grams: float,
                           alloy: str = "18k_yellow_gold") -> tuple[str, tuple]:
-    """Sanity-check a ring gold weight against the real-ring catalog.
-    Returns (level, (lo, hi)) where level is 'ok' | 'note' | 'warn'. The band
-    scales with the alloy density relative to 18k yellow."""
+    """Sanity-check a ring gold weight against the real-ring distribution (2,046
+    measured ring designs). Returns (level, (lo, hi)) where level is
+    'ok' | 'note' | 'warn'. The band scales with the alloy density vs 18k yellow."""
     if not grams or grams <= 0:
-        return "ok", _RING_SOLITAIRE_BAND_18K
+        return "ok", _RING_TYPICAL_BAND_18K
     scale = alloy_density(alloy) / alloy_density("18k_yellow_gold")
-    soft = (_RING_SOLITAIRE_BAND_18K[0] * scale, _RING_SOLITAIRE_BAND_18K[1] * scale)
+    soft = (_RING_TYPICAL_BAND_18K[0] * scale, _RING_TYPICAL_BAND_18K[1] * scale)
     hard = (_RING_HARD_BAND_18K[0] * scale, _RING_HARD_BAND_18K[1] * scale)
     if grams < hard[0] or grams > hard[1]:
         return "warn", (round(hard[0], 1), round(hard[1], 1))
