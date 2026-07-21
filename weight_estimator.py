@@ -177,6 +177,62 @@ def _sanitize_volumes(d: dict) -> None:
                 d[k] = 0.0
 
 
+def _coerce_num(x):
+    """Best-effort parse of a model numeric field: accepts 12.3, "12.3", or a
+    unit-suffixed string like "17.3 mm" / "2mm". Returns a finite float, or None
+    so the caller drops the field instead of crashing on float("17.3 mm")."""
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, (int, float)):
+        return float(x) if math.isfinite(float(x)) else None
+    if isinstance(x, str):
+        m = re.search(r"-?\d+(?:\.\d+)?", x)
+        if m:
+            try:
+                v = float(m.group())
+                return v if math.isfinite(v) else None
+            except ValueError:
+                return None
+    return None
+
+
+def _sanitize_dimensions(d: dict) -> None:
+    """Make the OPTIONAL dimension + stone fields safe so a model that returns a
+    unit-suffixed string ("17.3 mm"), a non-numeric value, or a non-dict
+    key_dimensions_mm can't crash calibration/scaling later. The estimate is
+    already accepted on its valid total volume; here we coerce what we can and
+    drop what we can't — the existing None-guards then degrade gracefully."""
+    v = _coerce_num(d.get("inner_diameter_mm"))
+    if v is not None:
+        d["inner_diameter_mm"] = v
+    else:
+        d.pop("inner_diameter_mm", None)
+
+    kd = d.get("key_dimensions_mm")
+    if isinstance(kd, dict):
+        d["key_dimensions_mm"] = {
+            k: cv for k, val in kd.items()
+            if (cv := _coerce_num(val)) is not None
+        }
+    elif kd is not None:
+        d.pop("key_dimensions_mm", None)  # non-dict would crash .items() later
+
+    stones = d.get("stones")
+    if isinstance(stones, list):
+        for stone in stones:
+            if not isinstance(stone, dict):
+                continue
+            for k in ("length_mm", "width_mm", "depth_mm"):
+                if k in stone:
+                    cv = _coerce_num(stone[k])
+                    if cv is not None:
+                        stone[k] = cv
+                    else:
+                        stone.pop(k, None)
+    elif stones is not None:
+        d.pop("stones", None)
+
+
 # Scale clamp: a wildly wrong model inner-diameter shouldn't blow up the solve.
 _SCALE_MIN, _SCALE_MAX = float(os.environ.get("WEIGHT_SCALE_MIN", "0.4")), \
     float(os.environ.get("WEIGHT_SCALE_MAX", "2.5"))
@@ -732,6 +788,7 @@ def _call_anthropic_vision(model: str, montage_url: str, prompt: str,
             parsed = _extract_json(text)
             if parsed is not None and _has_valid_total(parsed):
                 _sanitize_volumes(parsed)
+                _sanitize_dimensions(parsed)
                 parsed["_model"] = model
                 return parsed
             last_err = "unparseable / missing or non-finite total volume"
@@ -761,6 +818,7 @@ def _call_model(model: str, montage_url: str, prompt: str,
             parsed = _extract_json(result.get("output") or "")
             if parsed is not None and _has_valid_total(parsed):
                 _sanitize_volumes(parsed)
+                _sanitize_dimensions(parsed)
                 parsed["_model"] = model
                 return parsed
             last_err = "unparseable / missing or non-finite total volume"

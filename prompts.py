@@ -61,6 +61,11 @@ def build_combine_prompt_lean(image_specs, additional_specs):
     stone_line = (f"Stones: {stones.strip()}." if stones else
                   "All faceted stones are colourless white diamonds unless a colored gem is named.")
     notes = additional_specs.get("notes")
+    dimensions = additional_specs.get("dimensions")
+    # The validator is given the dimensions, so the renderer must be too — else it
+    # can be rejected for proportions it was never asked to produce.
+    dims_line = (f"Proportions & target dimensions to honour: {dimensions.strip()}.\n"
+                 if dimensions else "")
 
     return (
         f"Combine these reference photos into ONE photorealistic, finished ring that fuses "
@@ -69,6 +74,7 @@ def build_combine_prompt_lean(image_specs, additional_specs):
         "through a real basket/undergallery into one solid piece, with no gap and no floating or "
         "detached parts. Output exactly ONE ring (not two rings, not a stack, not an exploded view).\n"
         f"{metal_line}\n{stone_line}\n"
+        f"{dims_line}"
         "Studio product shot: a clean 3/4 angle, both shoulders symmetric, centred on a pure white "
         "background, sharp focus, no text or props."
         + (f"\nExtra notes: {notes.strip()}." if notes else "")
