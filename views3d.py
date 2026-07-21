@@ -45,10 +45,10 @@ _AMBIENT = 0.32
 #   elevation— +90 looks straight down (top), -90 straight up (underside)
 #   zoom     — >1 crops in (macro); y_shift re-centres after a zoom (px, +down)
 VIEW_3D_CAMERA = {
-    "Top-Down (plan)":       (0.0,  90.0, 1.0,  0.0),
-    "Side Profile (90°)":    (90.0,  0.0, 1.0,  0.0),
-    "Front Elevation":       (0.0,   0.0, 1.0,  0.0),
-    "Three-Quarter (45°)":   (45.0, 30.0, 1.0,  0.0),
+    "Top":         (0.0,  90.0, 1.0,  0.0),   # straight down (plan)
+    "Front":       (0.0,   0.0, 1.0,  0.0),   # head-on elevation
+    "Side":        (90.0,  0.0, 1.0,  0.0),   # true 90° profile
+    "Perspective": (45.0, 30.0, 1.0,  0.0),   # 3/4 hero angle
 }
 # Canonical fallback for any unmapped name.
 _DEFAULT_CAM = (45.0, 30.0, 1.0, 0.0)
@@ -201,6 +201,70 @@ def generate_3d_views(image_url: str, view_names):
     """
     glb_url = image_to_glb(image_url)
     return render_from_glb_url(glb_url, view_names), glb_url
+
+
+# ── photoreal re-skin: correct POSE from the mesh, photoreal LOOK from an edit ──
+# The geometry render fixes the camera pose/orientation (true top/front/side/
+# perspective — something edit models can't hold on their own); an edit model then
+# re-skins that exact pose to look like the real ring (metal + stones). Two fal
+# calls per view + one image-to-3D, but you get correct angles AND a photoreal look.
+RESKIN_MODEL = os.environ.get("VIEW_RESKIN_MODEL", "fal-ai/nano-banana-pro/edit")
+
+
+def _reskin_view(clay_png: bytes, design_url: str, view_name: str) -> str:
+    """Grey clay pose (image 1) + the real design (image 2) -> a PHOTOREAL render of
+    the real ring at the clay's exact camera angle. Returns the photoreal image URL."""
+    import fal_client
+    clay_url = fal_client.upload(clay_png, "image/png")
+    prompt = (
+        "Photorealistic studio product render of the jewelry piece shown in the SECOND "
+        f"image, posed at the EXACT camera angle and orientation of the FIRST image (a grey "
+        f"clay preview that defines only the {view_name.lower()} camera pose — ignore its "
+        "colour and material entirely). Reproduce the second image's metal colour, gemstones, "
+        "prongs, band and every design detail faithfully. Soft studio lighting, gentle "
+        "reflections, clean pure-white RGB(255,255,255) background, piece centered and sharp. "
+        "Show the piece ALONE as a product shot — never on a hand, finger, ear, neck or mannequin."
+    )
+    r = fal_client.subscribe(RESKIN_MODEL, arguments={
+        "image_urls": [clay_url, design_url], "prompt": prompt, "num_images": 1,
+        "resolution": "2K", "aspect_ratio": "auto", "output_format": "png"})
+    return (r.get("images") or [{}])[0].get("url") or (r.get("image") or {}).get("url")
+
+
+def _reskin_clay_set(clay: dict, design_url: str) -> dict:
+    """Re-skin a {name: clay PNG bytes} set in parallel -> {name: photoreal url}."""
+    import sys
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    out: dict = {}
+    if not clay:
+        return out
+    with ThreadPoolExecutor(max_workers=len(clay)) as ex:
+        futs = {ex.submit(_reskin_view, png, design_url, name): name
+                for name, png in clay.items()}
+        for fu in as_completed(futs):
+            name = futs[fu]
+            try:
+                u = fu.result()
+                if u:
+                    out[name] = u
+            except Exception as e:  # one view failing shouldn't sink the batch
+                print(f"[reskin] {name} failed: {e}", file=sys.stderr)
+    return out
+
+
+def generate_reskin_views(image_url: str, view_names):
+    """Full pipeline: image -> 3D mesh -> correct-pose clay per angle -> photoreal
+    re-skin. Returns ({name: photoreal_url}, glb_url). glb_url is returned so a
+    single view can be re-skinned later without paying for another 3D generation."""
+    glb_url = image_to_glb(image_url)
+    clay = render_from_glb_url(glb_url, view_names)   # {name: clay PNG bytes}
+    return _reskin_clay_set(clay, image_url), glb_url
+
+
+def reskin_views_from_glb(glb_url: str, design_url: str, view_names):
+    """Re-skin specific views from an EXISTING mesh (no new image-to-3D cost)."""
+    clay = render_from_glb_url(glb_url, view_names)
+    return _reskin_clay_set(clay, design_url)
 
 
 # ── code-drawn dimension annotations ─────────────────────────────────────────
