@@ -535,7 +535,7 @@ _VIEW_COMMON = (
 )
 
 VIEW_PROMPTS = {
-    "Top-Down (plan)": {
+    "Top": {
         "model": VIEW_MODEL,
         "icon": "⬆️",
         "prompt": (
@@ -545,17 +545,7 @@ VIEW_PROMPTS = {
             "are visible. ONLY the camera angle changes. " + _VIEW_COMMON
         ),
     },
-    "Side Profile (90°)": {
-        "model": VIEW_MODEL,
-        "icon": "↔️",
-        "prompt": (
-            "Re-render this EXACT same ring from a pure 90-degree side profile "
-            "(orthographic, no perspective), clearly showing the full BAND "
-            "THICKNESS, the shank taper from shoulder to base, and the head "
-            "height silhouette. ONLY the camera angle changes. " + _VIEW_COMMON
-        ),
-    },
-    "Front Elevation": {
+    "Front": {
         "model": VIEW_MODEL,
         "icon": "🔭",
         "prompt": (
@@ -566,7 +556,17 @@ VIEW_PROMPTS = {
             + _VIEW_COMMON
         ),
     },
-    "Three-Quarter (45°)": {
+    "Side": {
+        "model": VIEW_MODEL,
+        "icon": "↔️",
+        "prompt": (
+            "Re-render this EXACT same ring from a pure 90-degree side profile "
+            "(orthographic, no perspective), clearly showing the full BAND "
+            "THICKNESS, the shank taper from shoulder to base, and the head "
+            "height silhouette. ONLY the camera angle changes. " + _VIEW_COMMON
+        ),
+    },
+    "Perspective": {
         "model": VIEW_MODEL,
         "icon": "💍",
         "prompt": (
@@ -583,10 +583,10 @@ VIEW_PROMPTS = {
 # no-op (returns the same image). It DOES handle viewpoint when asked as a plain
 # imperative camera move, so use these when VIEW_MODEL is a Kontext id.
 _KONTEXT_CAMERA = {
-    "Top-Down (plan)": "Rotate the camera to look straight down at this exact ring from directly overhead — a top-down plan view.",
-    "Side Profile (90°)": "Rotate the camera to a pure 90-degree side profile of this exact ring, showing the full band thickness and head-height silhouette.",
-    "Front Elevation": "Rotate the camera to a straight head-on front view of this exact ring, looking directly at the head.",
-    "Three-Quarter (45°)": "Rotate the camera to a 45-degree three-quarter hero angle of this exact ring.",
+    "Top": "Rotate the camera to look straight down at this exact ring from directly overhead — a top-down plan view.",
+    "Front": "Rotate the camera to a straight head-on front view of this exact ring, looking directly at the head.",
+    "Side": "Rotate the camera to a pure 90-degree side profile of this exact ring, showing the full band thickness and head-height silhouette.",
+    "Perspective": "Rotate the camera to a 45-degree three-quarter hero angle of this exact ring.",
     "Band Edge & Thickness": "Move the camera in close on the bottom edge of the band of this exact ring to show its width, thickness and cross-section profile.",
     "Head & Setting Macro": "Move the camera into an extreme macro close-up of the head and setting of this exact ring.",
     "Underside / Gallery": "Rotate the camera to view this exact ring from directly underneath, showing the gallery rails and the underside of the head.",
@@ -1407,6 +1407,7 @@ if st.session_state.get("last_results"):
     _vbatch_col = st.columns([1, 3, 1])[1]
     with _vbatch_col:
         _batch_label = ("🧊 Generate All Views (3D)" if VIEW_ENGINE == "geometry"
+                        else "✨ Generate All Views (photoreal)" if VIEW_ENGINE == "reskin"
                         else "⚡ Generate All Views (parallel)")
         if st.button(_batch_label, key="view_btn_all", use_container_width=True, type="primary"):
             _vresults = {}
@@ -1422,6 +1423,7 @@ if st.session_state.get("last_results"):
                         st.write("Building 3D mesh from the base design…")
                         _vresults, _glb = views3d.generate_3d_views(base_design_url, view_names)
                         st.session_state["views_glb_url"] = _glb
+                        st.session_state["views_glb_src"] = base_design_url  # tie mesh to its design
                         for n in _vresults:
                             st.write(f"✓ {n}")
                         _vs.update(label=f"Done — {len(_vresults)} views rendered from geometry",
@@ -1430,6 +1432,28 @@ if st.session_state.get("last_results"):
                         _vs.update(label="3D path failed — falling back to edit model",
                                    state="error")
                         st.warning(f"Geometry engine error: {e}")
+            elif VIEW_ENGINE == "reskin":
+                # Correct POSE from a 3D mesh, photoreal LOOK from an edit re-skin:
+                # true top/front/side/perspective angles that still look like the ring.
+                with st.status("Building 3D mesh, then re-skinning each true angle to "
+                               "photoreal…", expanded=True) as _vs:
+                    try:
+                        import views3d
+                        st.write("Building 3D mesh from the base design…")
+                        _vresults, _glb = views3d.generate_reskin_views(base_design_url, view_names)
+                        st.session_state["views_glb_url"] = _glb
+                        st.session_state["views_glb_src"] = base_design_url  # tie mesh to its design
+                        for n in _vresults:
+                            st.write(f"✓ {n}")
+                        _missing = [n for n in view_names if n not in _vresults]
+                        for n in _missing:
+                            st.write(f"✗ {n} failed")
+                        _vs.update(
+                            label=f"Done — {len(_vresults)}/{len(view_names)} photoreal views at true angles",
+                            state="complete" if not _missing else "error")
+                    except Exception as e:
+                        _vs.update(label="Photoreal-views engine failed", state="error")
+                        st.warning(f"Photoreal-views engine error: {e}")
             else:
                 from concurrent.futures import ThreadPoolExecutor, as_completed
                 with st.status(f"Rendering {len(view_names)} views in parallel...", expanded=True) as _vs:
@@ -1520,15 +1544,39 @@ if st.session_state.get("last_results"):
                         if VIEW_ENGINE == "geometry":
                             import views3d
                             _glb = st.session_state.get("views_glb_url")
-                            if _glb:
-                                # re-render this angle from the cached mesh — no new 3D gen
-                                _one = views3d.render_from_glb_url(_glb, [view_name])
-                            else:
+                            _one = None
+                            if _glb and st.session_state.get("views_glb_src") == base_design_url:
+                                try:  # re-render this angle from the cached mesh — no new 3D gen
+                                    _one = views3d.render_from_glb_url(_glb, [view_name])
+                                except Exception:
+                                    _one = None  # expired/unusable mesh → regenerate below
+                            if not _one:
                                 _one, _glb = views3d.generate_3d_views(base_design_url, [view_name])
                                 st.session_state["views_glb_url"] = _glb
+                                st.session_state["views_glb_src"] = base_design_url
                             st.session_state.setdefault("views", {})[view_name] = _one[view_name]
                             st.toast(f"{view_name} ready!", icon=cfg["icon"])
                             st.rerun()
+                        elif VIEW_ENGINE == "reskin":
+                            import views3d
+                            _glb = st.session_state.get("views_glb_url")
+                            _one = None
+                            # reuse the cached mesh ONLY if it belongs to THIS design
+                            if _glb and st.session_state.get("views_glb_src") == base_design_url:
+                                try:  # re-skin this angle from the cached mesh — no new 3D gen
+                                    _one = views3d.reskin_views_from_glb(_glb, base_design_url, [view_name])
+                                except Exception:
+                                    _one = None  # expired/unusable mesh → regenerate below
+                            if not _one:
+                                _one, _glb = views3d.generate_reskin_views(base_design_url, [view_name])
+                                st.session_state["views_glb_url"] = _glb
+                                st.session_state["views_glb_src"] = base_design_url
+                            if _one.get(view_name):
+                                st.session_state.setdefault("views", {})[view_name] = _one[view_name]
+                                st.toast(f"{view_name} ready!", icon=cfg["icon"])
+                                st.rerun()
+                            else:
+                                st.warning(f"{view_name} produced no image.")
                         else:
                             result = generate_view(base_design_url, view_prompt_for(view_name), cfg["model"])
                             url = extract_image_url(result)
