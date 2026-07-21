@@ -6,9 +6,13 @@ streamlit>=1.35.0
 fal-client==1.0.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0
-# Optional: only needed if you add Opus to the weight ensemble (Opus isn't on
-# fal, so it's called via the Anthropic API directly).
+# Weight-ensemble high-accuracy upgrade (opt-in): Opus 4.8 / Fable 5 aren't on fal,
+# so they run via the Anthropic API, or via AWS Bedrock when WEIGHT_ANTHROPIC_BACKEND=bedrock.
 anthropic>=0.40.0
+# boto3: used ONLY by the opt-in AWS Bedrock backend (AnthropicBedrock). The default
+# fal ensemble and the direct Anthropic-API path don't touch it, but shipping it makes
+# the Bedrock high-accuracy path usable without a second deploy. Imported lazily.
+boto3>=1.34.0
 # Geometry-grounded Additional Views (VIEW_ENGINE=geometry, views3d.py): load the
 # fal image-to-3D GLB and rasterise true orthographic angles. Pure numpy+Pillow
 # software render — NO OpenGL/EGL needed, so it runs headless on Streamlit Cloud.
