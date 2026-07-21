@@ -1,9 +1,9 @@
 streamlit>=1.35.0
-# Pinned to the last CLASSIC-upload release. fal-client >= 0.5.4 switched file
-# uploads to the fal-cdn-v3 token flow (POST /storage/auth/token?...fal-cdn-v3),
-# which 401s for this key; <= 0.5.2 uploads the classic way that works with the
-# same key as the deployed mix-match app. Do NOT bump past 0.5.2 without testing.
-fal-client==0.5.2
+# fal-client: the current FAL_KEY REQUIRES fal's v3 token upload flow (fal-cdn-v3).
+# The old classic-upload pin (0.5.2) now raises FalClientError on every upload
+# because fal retired the classic flow, which broke image upload app-wide. 1.0.0 is
+# signature-compatible (upload(content_type=) + subscribe(model, arguments=)).
+fal-client==1.0.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0
 # Optional: only needed if you add Opus to the weight ensemble (Opus isn't on
