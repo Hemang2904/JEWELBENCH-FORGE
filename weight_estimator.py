@@ -18,8 +18,9 @@ We report only the two numbers the spec asks for:
 The shank (band) is reported as a min..max RANGE, taken from the disagreement
 between the two models plus a small uncertainty pad.
 
-Opus is not available on fal, so this ensemble is the high-accuracy path. Swap
-either model via WEIGHT_MODEL_PRIMARY / WEIGHT_MODEL_SECONDARY.
+Opus 4.8 and Fable 5 are not available on fal, so they run on the Anthropic API
+directly — this ensemble is the high-accuracy path (targeting <=10% deviation).
+Swap either model via WEIGHT_MODEL_PRIMARY / WEIGHT_MODEL_SECONDARY.
 """
 
 from __future__ import annotations
@@ -36,8 +37,17 @@ import urllib.request
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-# gemini-3-pro-preview isn't enabled on fal's any-llm/vision endpoint, so we use
-# gemini-2.5-pro (the latest Gemini that works there) + Claude Sonnet 4.5.
+# DEFAULT (no extra keys needed): the fal-hosted ensemble — gemini-2.5-pro +
+# Claude Sonnet 4.5 — which is the best-suited pairing available on fal for this
+# task. The median + outlier rejection across the ensemble keeps a single bad
+# read in check, targeting <=10% deviation from the true weight.
+#
+# HIGH-ACCURACY UPGRADE (opt-in, needs Anthropic access): set the models to
+# Opus 4.8 + Fable 5, called either via the Anthropic API or AWS Bedrock:
+#   WEIGHT_MODEL_PRIMARY=anthropic-direct/claude-opus-4-8
+#   WEIGHT_MODEL_SECONDARY=anthropic-direct/claude-fable-5
+#   WEIGHT_ANTHROPIC_BACKEND=bedrock            # (or "api" with ANTHROPIC_API_KEY)
+# The routing (_is_anthropic_direct / _uses_bedrock) is already in place.
 WEIGHT_MODEL_PRIMARY = os.environ.get(
     "WEIGHT_MODEL_PRIMARY", "google/gemini-2.5-pro"
 )
@@ -46,23 +56,44 @@ WEIGHT_MODEL_SECONDARY = os.environ.get(
 )
 # any-llm/vision is the existing path; kept overridable since fal marks it legacy.
 VISION_ENDPOINT = os.environ.get("WEIGHT_VISION_ENDPOINT", "fal-ai/any-llm/vision")
-# Extra models tried (in order) if the primary two don't BOTH return, so the
-# ensemble reliably reaches WEIGHT_MIN_MODELS independent estimates. gpt-5-chat
-# is intentionally NOT a default — it returned physically-impossible geometry in
-# testing; gpt-5 (reasoning) is a safer diverse third family, and the median +
-# outlier rejection in reconcile() now protects against any single bad member.
+# Third+ ensemble votes / graceful fallback if a primary model doesn't return, so
+# the ensemble reliably reaches WEIGHT_MIN_MODELS independent estimates. A diverse
+# family (Gemini flash + GPT-5) guards against a shared blind spot; the median +
+# outlier rejection in reconcile() protects against any single bad member.
 WEIGHT_FALLBACK_MODELS = [
     m.strip() for m in os.environ.get(
         "WEIGHT_FALLBACK_MODELS", "google/gemini-2.5-flash,openai/gpt-5",
     ).split(",") if m.strip()
 ]
 WEIGHT_CALL_RETRIES = int(os.environ.get("WEIGHT_CALL_RETRIES", "3"))
+# Hard wall-clock deadline for the whole parallel ensemble phase. fal_client has
+# no timeout, so a single stalled model (e.g. a flaky Gemini queue) would block
+# forever and the Streamlit app shows "running…" indefinitely (= "not
+# responding"). Past this many seconds we drop the still-pending models and
+# proceed with whatever returned.
+WEIGHT_ENSEMBLE_TIMEOUT = int(os.environ.get("WEIGHT_ENSEMBLE_TIMEOUT", "150"))
 # Robust aggregation (median + outlier rejection) only bites at n>=3: at n=2 the
 # median equals the mean and one wrong model still drags the answer half-way. So
 # the ensemble TARGETS three good estimates; it still degrades gracefully to
 # mean (n=2) or single (n=1) when models fail.
 WEIGHT_MIN_MODELS = int(os.environ.get("WEIGHT_MIN_MODELS", "3"))
 CASTING_FACTOR = float(os.environ.get("CASTING_FACTOR", "0.97"))
+
+# How the Opus/Fable (anthropic-direct) vision calls reach Anthropic:
+#   "api"     -> the Anthropic API (needs ANTHROPIC_API_KEY)
+#   "bedrock" -> AWS Bedrock via boto3 bedrock-runtime invoke_model. Works with a
+#                Bedrock API key (AWS_BEARER_TOKEN_BEDROCK), IAM access-key/secret,
+#                or an instance role (needs bedrock:InvokeModel + AWS_REGION; no
+#                ANTHROPIC_API_KEY). Bedrock uses its OWN model ids, so map the
+#                friendly names to Bedrock inference-profile ids (env-overridable).
+WEIGHT_ANTHROPIC_BACKEND = os.environ.get("WEIGHT_ANTHROPIC_BACKEND", "api").lower()
+AWS_BEDROCK_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+# Friendly id -> Bedrock model / inference-profile id. Override per-model via env
+# (BEDROCK_MODEL_<UPPER_ID_WITH_UNDERSCORES>) — set these to YOUR account's ids.
+_BEDROCK_MODEL_IDS = {
+    "claude-opus-4-8": os.environ.get("BEDROCK_MODEL_CLAUDE_OPUS_4_8", "us.anthropic.claude-opus-4-8"),
+    "claude-fable-5": os.environ.get("BEDROCK_MODEL_CLAUDE_FABLE_5", "us.anthropic.claude-fable-5"),
+}
 # Extra uncertainty padding applied to the min..max range (fraction).
 RANGE_PAD = float(os.environ.get("WEIGHT_RANGE_PAD", "0.05"))
 
@@ -468,6 +499,10 @@ def scale_to_target(estimate: dict, target_weight_g: float) -> dict:
             out[vk] = round(float(estimate[vk]) * k, 1)
     lo, hi = estimate.get("shank_weight_range_g", [0, 0])
     out["shank_weight_range_g"] = [round(lo * k, 3), round(hi * k, 3)]
+    grange = estimate.get("gold_weight_range_g")
+    if grange and len(grange) == 2:  # the gold-weight band scales linearly too
+        out["gold_weight_range_g"] = [round(float(grange[0]) * k, 3),
+                                      round(float(grange[1]) * k, 3)]
     # metal linear dimensions scale by cube-root so proportions are preserved
     kd = dict(estimate.get("key_dimensions_mm") or {})
     for dk in ("band_width", "band_thickness", "head_height", "head_diameter"):
@@ -630,50 +665,100 @@ def _build_montage(image_urls: list, cell: int = 768) -> str:
 
 
 def _is_anthropic_direct(model: str) -> bool:
-    """Opus (and any 'anthropic-direct/...' id) isn't on fal — call Anthropic's
-    API directly. Detected by 'opus' or an explicit 'anthropic-direct/' prefix."""
+    """Opus 4.8 and Fable 5 (and any 'anthropic-direct/'/'bedrock/' id) aren't on fal
+    — call Anthropic directly (Anthropic API or AWS Bedrock). Detected by an explicit
+    prefix or an 'opus'/'fable' family name."""
     m = model.lower()
-    return m.startswith("anthropic-direct/") or "opus" in m
+    return (m.startswith(("anthropic-direct/", "bedrock/"))
+            or "opus" in m or "fable" in m)
 
 
 def _anthropic_model_id(model: str) -> str:
-    for pre in ("anthropic-direct/", "anthropic/", "openrouter/"):
+    for pre in ("anthropic-direct/", "bedrock/", "anthropic/", "openrouter/"):
         if model.startswith(pre):
             return model[len(pre):]
     return model
 
 
+def _uses_bedrock(model: str) -> bool:
+    """True when the Opus/Fable call should go through AWS Bedrock rather than the
+    Anthropic API — either globally (WEIGHT_ANTHROPIC_BACKEND=bedrock) or per-model
+    via a 'bedrock/' id prefix."""
+    return WEIGHT_ANTHROPIC_BACKEND == "bedrock" or model.lower().startswith("bedrock/")
+
+
+def _bedrock_model_id(real: str) -> str:
+    """Resolve a friendly id ('claude-opus-4-8') to the Bedrock model / inference
+    -profile id. If it already looks like a Bedrock id (has 'anthropic.'), use as-is."""
+    if "anthropic." in real or ".claude" in real:
+        return real
+    return _BEDROCK_MODEL_IDS.get(real, real)
+
+
 def _call_anthropic_vision(model: str, montage_url: str, prompt: str,
                            tries: int) -> dict:
-    """Direct Anthropic vision call (for Opus, which fal doesn't host).
-    Needs ANTHROPIC_API_KEY + the `anthropic` package."""
+    """Vision call for Opus/Fable (fal doesn't host them). Two backends:
+      bedrock -> boto3 bedrock-runtime InvokeModel — works with a Bedrock API key
+                 (AWS_BEARER_TOKEN_BEDROCK), IAM access-key/secret, OR an instance
+                 role, whichever the standard AWS chain finds. Needs boto3.
+      api     -> the Anthropic API (ANTHROPIC_API_KEY). Needs the `anthropic` pkg.
+    The montage is fetched once and the Anthropic messages content is identical for
+    both; only the transport differs."""
     import base64
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        return {"_model": model, "_error": "ANTHROPIC_API_KEY not set"}
-    try:
-        import anthropic
-    except ImportError:
-        return {"_model": model, "_error": "anthropic package not installed"}
+    bedrock = _uses_bedrock(model)
     try:
         with urllib.request.urlopen(montage_url, timeout=20) as r:
             b64 = base64.standard_b64encode(r.read()).decode()
     except Exception as e:
         return {"_model": model, "_error": f"montage fetch failed: {e}"}
 
-    client = anthropic.Anthropic()
-    real = _anthropic_model_id(model)
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+        {"type": "text", "text": prompt},
+    ]
+
+    if bedrock:
+        try:
+            import boto3
+        except ImportError:
+            return {"_model": model, "_error": "boto3 not installed (needed for Bedrock)"}
+        real = _bedrock_model_id(_anthropic_model_id(model))
+        try:
+            brt = boto3.client("bedrock-runtime", region_name=AWS_BEDROCK_REGION)
+        except Exception as e:  # missing creds/region → model error, ensemble degrades
+            return {"_model": model, "_error": f"Bedrock client init failed: {e}"}
+        # Bedrock's Anthropic InvokeModel body carries the model id OUT of band, and
+        # an anthropic_version instead of "model".
+        req_body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2000,
+            "messages": [{"role": "user", "content": content}],
+        })
+
+        def _invoke() -> str:
+            resp = brt.invoke_model(modelId=real, body=req_body)
+            payload = json.loads(resp["body"].read())
+            return "".join(b.get("text", "") for b in payload.get("content", [])
+                           if b.get("type") == "text")
+    else:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return {"_model": model, "_error": "ANTHROPIC_API_KEY not set"}
+        try:
+            import anthropic
+        except ImportError:
+            return {"_model": model, "_error": "anthropic package not installed"}
+        client = anthropic.Anthropic()
+        real = _anthropic_model_id(model)
+
+        def _invoke() -> str:
+            msg = client.messages.create(model=real, max_tokens=2000,
+                                         messages=[{"role": "user", "content": content}])
+            return "".join(b.text for b in msg.content if b.type == "text")
+
     last_err = "unknown error"
     for attempt in range(1, tries + 1):
         try:
-            msg = client.messages.create(
-                model=real, max_tokens=2000,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64",
-                     "media_type": "image/png", "data": b64}},
-                    {"type": "text", "text": prompt},
-                ]}],
-            )
-            text = "".join(b.text for b in msg.content if b.type == "text")
+            text = _invoke()
             parsed = _extract_json(text)
             if parsed is not None and _has_valid_total(parsed):
                 _sanitize_volumes(parsed)
@@ -689,8 +774,8 @@ def _call_anthropic_vision(model: str, montage_url: str, prompt: str,
 
 def _call_model(model: str, montage_url: str, prompt: str,
                 tries: int | None = None) -> dict:
-    """One model, with retries + tolerant parsing. Routes Opus/anthropic-direct
-    ids to the Anthropic API; everything else goes through fal."""
+    """One model, with retries + tolerant parsing. Routes Opus/Fable/anthropic-direct
+    ids to Anthropic (Bedrock via boto3, or the Anthropic API); everything else -> fal."""
     tries = WEIGHT_CALL_RETRIES if tries is None else tries
     if _is_anthropic_direct(model):
         return _call_anthropic_vision(model, montage_url, prompt, tries)
@@ -749,12 +834,25 @@ def estimate_weight(image_urls: list[str], alloy: str,
     # never demand more than we have candidates for.
     target = max(2, min(WEIGHT_MIN_MODELS, len(ordered)))
 
-    # Phase 1: the first `target` candidates in parallel (each retries internally).
-    from concurrent.futures import ThreadPoolExecutor
+    # Phase 1: the first `target` candidates in parallel (each retries internally),
+    # under a hard wall-clock deadline so one stalled fal call can't freeze the app.
+    from concurrent.futures import (ThreadPoolExecutor, as_completed,
+                                    TimeoutError as _FTimeout)
     first = ordered[:target]
-    with ThreadPoolExecutor(max_workers=max(1, len(first))) as ex:
-        for res in ex.map(lambda m: _call_model(m, montage_url, prompt), first):
-            _record(res)
+    ex = ThreadPoolExecutor(max_workers=max(1, len(first)))
+    futs = {ex.submit(_call_model, m, montage_url, prompt): m for m in first}
+    done = set()
+    try:
+        for fut in as_completed(futs, timeout=WEIGHT_ENSEMBLE_TIMEOUT):
+            done.add(fut)
+            _record(fut.result())
+    except _FTimeout:
+        pass
+    for fut, m in futs.items():
+        if fut not in done:
+            _record({"_model": m,
+                     "_error": f"timed out after {WEIGHT_ENSEMBLE_TIMEOUT}s"})
+    ex.shutdown(wait=False)   # abandon any still-hung call; don't block the app
 
     # Phase 2: still short? walk the remaining fallbacks one at a time.
     for m in ordered[target:]:

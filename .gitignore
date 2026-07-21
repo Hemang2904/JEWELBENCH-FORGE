@@ -18,3 +18,27 @@ tools/parsed_records.json
 tools/_volcache.json
 tools/report_content.json
 tools/_ring_volcache.json
+
+# ── Local demo / runtime artifacts (not for the repo) ─────────────────────────
+generated_designs/
+studio_local.html
+assets/mesh_*.glb
+.env.bak.*
+
+# Internal QA-integration material (kept out of the public Forge repo)
+docs/
+FORGE_INTO_QA_PLAN_*.md
+forge_estimator_service.py
+requirements-estimator.txt
+tools/patch_studio_ui.py
+
+# Local FastAPI bridge + standalone HTML demo + co-pilot (not part of the
+# Streamlit Tech Sheet deliverable; kept local — separate concern with its own
+# review surface).
+api.py
+techsheet_studio.html
+run_local.sh
+bulk.py
+copilot.py
+copilot_prompts/
+assets/

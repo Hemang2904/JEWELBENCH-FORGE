@@ -1,14 +1,17 @@
 streamlit>=1.35.0
-# Pinned to the last CLASSIC-upload release. fal-client >= 0.5.4 switched file
-# uploads to the fal-cdn-v3 token flow (POST /storage/auth/token?...fal-cdn-v3),
-# which 401s for this key; <= 0.5.2 uploads the classic way that works with the
-# same key as the deployed mix-match app. Do NOT bump past 0.5.2 without testing.
-fal-client==0.5.2
+# fal-client: fal retired the classic upload flow, so older pins (e.g. 0.5.2)
+# raise FalClientError on upload. Pin to a modern release that uses the v3 token
+# upload flow (fal-cdn-v3) for upload + subscribe.
+fal-client==1.0.0
 python-dotenv>=1.0.0
 Pillow>=10.0.0
-# Optional: only needed if you add Opus to the weight ensemble (Opus isn't on
-# fal, so it's called via the Anthropic API directly).
+# Vision reasoning for the weight ensemble: Opus 4.8 + Fable 5 (not on fal), called
+# either via the Anthropic API or AWS Bedrock (WEIGHT_ANTHROPIC_BACKEND=bedrock).
+# anthropic: the Anthropic-API backend. boto3: the Bedrock backend (boto3
+# bedrock-runtime invoke_model). >=1.39 is required for Bedrock API-key /
+# AWS_BEARER_TOKEN_BEDROCK support.
 anthropic>=0.40.0
+boto3>=1.39.0
 # Geometry-grounded Additional Views (VIEW_ENGINE=geometry, views3d.py): load the
 # fal image-to-3D GLB and rasterise true orthographic angles. Pure numpy+Pillow
 # software render — NO OpenGL/EGL needed, so it runs headless on Streamlit Cloud.
