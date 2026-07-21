@@ -81,17 +81,18 @@ CASTING_FACTOR = float(os.environ.get("CASTING_FACTOR", "0.97"))
 
 # How the Opus/Fable (anthropic-direct) vision calls reach Anthropic:
 #   "api"     -> the Anthropic API (needs ANTHROPIC_API_KEY)
-#   "bedrock" -> AWS Bedrock via the anthropic SDK's AnthropicBedrock client
-#                (needs AWS creds/role with bedrock:InvokeModel + AWS_REGION; no
-#                 ANTHROPIC_API_KEY). Bedrock uses its OWN model ids, so map the
-#                 friendly names to Bedrock inference-profile ids (env-overridable).
+#   "bedrock" -> AWS Bedrock via boto3 bedrock-runtime invoke_model. Works with a
+#                Bedrock API key (AWS_BEARER_TOKEN_BEDROCK), IAM access-key/secret,
+#                or an instance role (+ AWS_REGION; no ANTHROPIC_API_KEY). Bedrock
+#                uses its OWN model ids, so map the friendly names to Bedrock
+#                inference-profile ids (env-overridable).
 WEIGHT_ANTHROPIC_BACKEND = os.environ.get("WEIGHT_ANTHROPIC_BACKEND", "api").lower()
 AWS_BEDROCK_REGION = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
 # Friendly id -> Bedrock model / inference-profile id. Override per-model via env
 # (BEDROCK_MODEL_<UPPER_ID_WITH_UNDERSCORES>) — set these to YOUR account's ids.
 _BEDROCK_MODEL_IDS = {
-    "claude-opus-4-8": os.environ.get("BEDROCK_MODEL_CLAUDE_OPUS_4_8", "us.anthropic.claude-opus-4-8-v1:0"),
-    "claude-fable-5": os.environ.get("BEDROCK_MODEL_CLAUDE_FABLE_5", "us.anthropic.claude-fable-5-v1:0"),
+    "claude-opus-4-8": os.environ.get("BEDROCK_MODEL_CLAUDE_OPUS_4_8", "us.anthropic.claude-opus-4-8"),
+    "claude-fable-5": os.environ.get("BEDROCK_MODEL_CLAUDE_FABLE_5", "us.anthropic.claude-fable-5"),
 }
 # Extra uncertainty padding applied to the min..max range (fraction).
 RANGE_PAD = float(os.environ.get("WEIGHT_RANGE_PAD", "0.05"))
@@ -479,7 +480,7 @@ def reconcile(estimates: list[dict], alloy: str) -> dict:
         disagreement = round((max(kept) - min(kept)) / total_point, 3)
 
     # A single model can't be cross-checked, so it never gets "high".
-    if single_model:
+    if single_model and WEIGHT_MIN_MODELS > 1:
         confidence = "medium"
     elif disagreement > 0.25:
         confidence = "low"
@@ -748,43 +749,66 @@ def _bedrock_model_id(real: str) -> str:
 
 def _call_anthropic_vision(model: str, montage_url: str, prompt: str,
                            tries: int) -> dict:
-    """Anthropic vision call for Opus/Fable (fal doesn't host them). Routes to AWS
-    Bedrock (AnthropicBedrock, AWS creds) or the Anthropic API (ANTHROPIC_API_KEY)
-    per _uses_bedrock. Needs the `anthropic` package (+ boto3 for Bedrock)."""
+    """Vision call for Opus/Fable (fal doesn't host them). Two backends:
+      bedrock -> boto3 bedrock-runtime InvokeModel — works with a Bedrock API key
+                 (AWS_BEARER_TOKEN_BEDROCK), IAM access-key/secret, OR an instance
+                 role, whichever the standard AWS chain finds. Needs boto3.
+      api     -> the Anthropic API (ANTHROPIC_API_KEY). Needs the `anthropic` pkg.
+    The montage is fetched once and the Anthropic messages content is identical for
+    both; only the transport differs."""
     import base64
     bedrock = _uses_bedrock(model)
-    try:
-        import anthropic
-    except ImportError:
-        return {"_model": model, "_error": "anthropic package not installed"}
-    if bedrock:
-        try:
-            client = anthropic.AnthropicBedrock(aws_region=AWS_BEDROCK_REGION)
-        except Exception as e:  # missing boto3/creds → surface as a model error, ensemble degrades
-            return {"_model": model, "_error": f"Bedrock client init failed: {e}"}
-    else:
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            return {"_model": model, "_error": "ANTHROPIC_API_KEY not set"}
-        client = anthropic.Anthropic()
     try:
         with urllib.request.urlopen(montage_url, timeout=20) as r:
             b64 = base64.standard_b64encode(r.read()).decode()
     except Exception as e:
         return {"_model": model, "_error": f"montage fetch failed: {e}"}
 
-    real = _bedrock_model_id(_anthropic_model_id(model)) if bedrock else _anthropic_model_id(model)
+    content = [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}},
+        {"type": "text", "text": prompt},
+    ]
+
+    if bedrock:
+        try:
+            import boto3
+        except ImportError:
+            return {"_model": model, "_error": "boto3 not installed (needed for Bedrock)"}
+        real = _bedrock_model_id(_anthropic_model_id(model))
+        try:
+            brt = boto3.client("bedrock-runtime", region_name=AWS_BEDROCK_REGION)
+        except Exception as e:  # missing creds/region → model error, ensemble degrades
+            return {"_model": model, "_error": f"Bedrock client init failed: {e}"}
+        req_body = json.dumps({
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 2000,
+            "messages": [{"role": "user", "content": content}],
+        })
+
+        def _invoke() -> str:
+            resp = brt.invoke_model(modelId=real, body=req_body)
+            payload = json.loads(resp["body"].read())
+            return "".join(b.get("text", "") for b in payload.get("content", [])
+                           if b.get("type") == "text")
+    else:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return {"_model": model, "_error": "ANTHROPIC_API_KEY not set"}
+        try:
+            import anthropic
+        except ImportError:
+            return {"_model": model, "_error": "anthropic package not installed"}
+        client = anthropic.Anthropic()
+        real = _anthropic_model_id(model)
+
+        def _invoke() -> str:
+            msg = client.messages.create(model=real, max_tokens=2000,
+                                         messages=[{"role": "user", "content": content}])
+            return "".join(b.text for b in msg.content if b.type == "text")
+
     last_err = "unknown error"
     for attempt in range(1, tries + 1):
         try:
-            msg = client.messages.create(
-                model=real, max_tokens=2000,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64",
-                     "media_type": "image/png", "data": b64}},
-                    {"type": "text", "text": prompt},
-                ]}],
-            )
-            text = "".join(b.text for b in msg.content if b.type == "text")
+            text = _invoke()
             parsed = _extract_json(text)
             if parsed is not None and _has_valid_total(parsed):
                 _sanitize_volumes(parsed)

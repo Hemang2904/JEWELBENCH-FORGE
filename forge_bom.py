@@ -427,7 +427,7 @@ def render_priced_bom(est: dict, target_w: float = 0.0,
             st.caption(f"ℹ️ {_gw:.1f} g is outside the typical ring band "
                        f"({_lo:.1f}–{_hi:.1f} g, from 2,046 real ring designs) — fine for a "
                        "heavier/lighter style, worth a sanity check.")
-    if est.get("single_model"):
+    if est.get("single_model") and we.WEIGHT_MIN_MODELS > 1:
         st.warning("⚠️ Only one model returned — the ensemble cross-check "
                    "didn't run, so treat this as a single-model estimate "
                    "(confidence capped at medium).")
